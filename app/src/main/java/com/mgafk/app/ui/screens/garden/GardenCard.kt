@@ -103,8 +103,9 @@ private data class ResolvedPlant(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
-    var selectedRarity by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedMutation by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedRarities by rememberSaveable { mutableStateOf<Set<String?>>(emptySet()) }
+    var selectedMutations by rememberSaveable { mutableStateOf<Set<String?>>(emptySet()) }
+    var nonMutatedOnly by rememberSaveable { mutableStateOf(false) }
 
     // Pre-resolve all API lookups once when plants/apiReady change
     val resolved = remember(plants, apiReady) {
@@ -131,17 +132,18 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
     }
 
     // Reset filters if they no longer match available options
-    val safeRarity = selectedRarity?.takeIf { it in allRarities }
-    val safeMutation = selectedMutation?.takeIf { it in allMutations }
-    if (safeRarity != selectedRarity) selectedRarity = safeRarity
-    if (safeMutation != selectedMutation) selectedMutation = safeMutation
+    val safeRarities = selectedRarities.filter { it in allRarities }.toSet()
+    val safeMutations = selectedMutations.filter { it in allMutations }.toSet()
+    if (safeRarities != selectedRarities) selectedRarities = safeRarities
+    if (safeMutations != selectedMutations) selectedMutations = safeMutations
 
     // Fast filter — no API calls, just string comparisons on pre-resolved data
-    val filtered = remember(resolved, safeRarity, safeMutation) {
-        if (safeRarity == null && safeMutation == null) resolved
+    val filtered = remember(resolved, safeRarities, safeMutations, nonMutatedOnly) {
+        if (safeRarities.isEmpty() && safeMutations.isEmpty() && !nonMutatedOnly) resolved
         else resolved.filter { rp ->
-            (safeRarity == null || rp.rarity == safeRarity) &&
-                (safeMutation == null || safeMutation in rp.snapshot.mutations)
+            (safeRarities.isEmpty() || rp.rarity in safeRarities) &&
+                (safeMutations.isEmpty() || safeMutations.any { it in rp.snapshot.mutations }) &&
+                (!nonMutatedOnly || rp.snapshot.mutations.isEmpty())
         }
     }
 
@@ -149,7 +151,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
         title = "Plants",
         trailing = {
             Text(
-                text = if (safeRarity != null || safeMutation != null)
+                text = if (safeRarities.isNotEmpty() || safeMutations.isNotEmpty() || nonMutatedOnly)
                     "${filtered.size}/${plants.size}" else "${plants.size} plants",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
@@ -168,7 +170,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 allRarities.forEach { rarity ->
-                    val isSelected = rarity == safeRarity
+                    val isSelected = rarity in safeRarities
                     val color = rarityColor(rarity)
                     Text(
                         text = rarity,
@@ -184,13 +186,43 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                                 RoundedCornerShape(12.dp),
                             )
                             .background(if (isSelected) color.copy(alpha = 0.18f) else SurfaceCard)
-                            .clickable { selectedRarity = if (isSelected) null else rarity }
+                            .clickable {
+                                selectedRarities = if (isSelected) {
+                                    safeRarities - rarity
+                                } else {
+                                    safeRarities + rarity
+                                }
+                            }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
 
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .border(
+                            1.5.dp,
+                            if (nonMutatedOnly) Accent else SurfaceBorder,
+                            CircleShape,
+                        )
+                        .background(if (nonMutatedOnly) Accent.copy(alpha = 0.18f) else SurfaceCard)
+                        .clickable {
+                            nonMutatedOnly = !nonMutatedOnly
+                            if (nonMutatedOnly) selectedMutations = emptySet()
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "❌",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (nonMutatedOnly) Accent else TextSecondary,
+                    )
+                }
+
                 allMutations.forEach { mutation ->
-                    val isSelected = mutation == safeMutation
+                    val isSelected = mutation in safeMutations
                     Box(
                         modifier = Modifier
                             .size(28.dp)
@@ -201,7 +233,14 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                                 CircleShape,
                             )
                             .background(if (isSelected) Accent.copy(alpha = 0.18f) else SurfaceCard)
-                            .clickable { selectedMutation = if (isSelected) null else mutation },
+                            .clickable {
+                                if (nonMutatedOnly) nonMutatedOnly = false
+                                selectedMutations = if (isSelected) {
+                                    safeMutations - mutation
+                                } else {
+                                    safeMutations + mutation
+                                }
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         SpriteImage(
