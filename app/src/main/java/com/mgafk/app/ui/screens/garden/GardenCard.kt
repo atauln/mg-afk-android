@@ -105,7 +105,7 @@ private data class ResolvedPlant(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
-    var selectedRarities by rememberSaveable { mutableStateOf<Set<String?>>(emptySet()) }
+    var selectedRarity by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedMutations by rememberSaveable { mutableStateOf<Set<String?>>(emptySet()) }
     var nonMutatedOnly by rememberSaveable { mutableStateOf(false) }
 
@@ -135,17 +135,17 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
     }
 
     // Reset filters if they no longer match available options
-    val safeRarities = selectedRarities.filter { it in allRarities }.toSet()
+    val safeRarity = selectedRarity?.takeIf { it in allRarities }
     val safeMutations = selectedMutations.filter { it in allMutations }.toSet()
-    if (safeRarities != selectedRarities) selectedRarities = safeRarities
+    if (safeRarity != selectedRarity) selectedRarity = safeRarity
     if (safeMutations != selectedMutations) selectedMutations = safeMutations
 
     // Fast filter — no API calls, just string comparisons on pre-resolved data
-    val filtered = remember(resolved, safeRarities, safeMutations, nonMutatedOnly) {
-        if (safeRarities.isEmpty() && safeMutations.isEmpty() && !nonMutatedOnly) resolved
+    val filtered = remember(resolved, safeRarity, safeMutations, nonMutatedOnly) {
+        if (safeRarity == null && safeMutations.isEmpty() && !nonMutatedOnly) resolved
         else resolved.filter { rp ->
-            (safeRarities.isEmpty() || rp.rarity in safeRarities) &&
-                (safeMutations.isEmpty() || safeMutations.any { it in rp.snapshot.mutations }) &&
+            (safeRarity == null || rp.rarity == safeRarity) &&
+                (safeMutations.isEmpty() || safeMutations.all { it in rp.snapshot.mutations }) &&
                 (!nonMutatedOnly || rp.snapshot.mutations.isEmpty())
         }
     }
@@ -170,7 +170,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                     Spacer(modifier = Modifier.size(8.dp))
                 }
                 Text(
-                    text = if (safeRarities.isEmpty() && safeMutations.isEmpty() && !nonMutatedOnly)
+                    text = if (safeRarity != null || safeMutations.isNotEmpty() || nonMutatedOnly)
                         "${filtered.size}/${plants.size}" else "${plants.size} plants",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
@@ -191,7 +191,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 allRarities.forEach { rarity ->
-                    val isSelected = rarity in safeRarities
+                    val isSelected = rarity == safeRarity
                     val color = rarityColor(rarity)
                     Text(
                         text = rarity,
@@ -207,13 +207,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                                 RoundedCornerShape(12.dp),
                             )
                             .background(if (isSelected) color.copy(alpha = 0.18f) else SurfaceCard)
-                            .clickable {
-                                selectedRarities = if (isSelected) {
-                                    safeRarities - rarity
-                                } else {
-                                    safeRarities + rarity
-                                }
-                            }
+                            .clickable { selectedRarity = if (isSelected) null else rarity }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
