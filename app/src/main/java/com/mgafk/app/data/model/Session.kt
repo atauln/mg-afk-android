@@ -199,6 +199,8 @@ data class GardenPlantSnapshot(
     // Optional growth timing for the active grow slot (ms since epoch)
     val startTime: Long? = null,
     val endTime: Long? = null,
+    // Optional slot identifier for multi-slot plants
+    val slotId: Int? = null,
 )
 
 /** Serializable snapshot of a shop for Session persistence */
