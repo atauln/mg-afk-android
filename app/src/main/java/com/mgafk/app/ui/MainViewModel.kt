@@ -7,6 +7,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.util.Log
 import coil.imageLoader
 import coil.request.ImageRequest
 import androidx.lifecycle.AndroidViewModel
@@ -76,6 +77,7 @@ data class UiState(
     val purchaseError: String = "",
     val showShopTip: Boolean = false,
     val showTroughTip: Boolean = false,
+    val showPetTip: Boolean = false,
     val settings: AppSettings = AppSettings(),
     val serviceLogs: List<AfkService.ServiceLog> = emptyList(),
 ) {
@@ -84,6 +86,7 @@ data class UiState(
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private companion object { const val TAG = "MainViewModel" }
     private val repo = SessionRepository(application)
     private val alertNotifier = AlertNotifier(application)
     private val clients = mutableMapOf<String, RoomClient>()
@@ -114,6 +117,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val collapsedCards = repo.loadCollapsedCards()
             val shopTipDismissed = repo.isShopTipDismissed()
             val troughTipDismissed = repo.isTroughTipDismissed()
+            val petTipDismissed = repo.isPetTipDismissed()
             val settings = repo.loadSettings()
             _state.value = UiState(
                 sessions = sessions,
@@ -122,6 +126,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 collapsedCards = collapsedCards,
                 showShopTip = !shopTipDismissed,
                 showTroughTip = !troughTipDismissed,
+                showPetTip = !petTipDismissed,
                 settings = settings,
             )
             // Collect service logs (wake lock events etc.)
@@ -314,6 +319,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissTroughTip() {
         _state.update { it.copy(showTroughTip = false) }
         viewModelScope.launch { repo.dismissTroughTip() }
+    }
+
+    fun dismissPetTip() {
+        _state.update { it.copy(showPetTip = false) }
+        viewModelScope.launch { repo.dismissPetTip() }
     }
 
     fun purchaseShopItem(sessionId: String, shopType: String, itemName: String) {
@@ -528,6 +538,163 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ---- Pet swap / equip / unequip ----
+
+    /**
+     * Swap an active pet with one from inventory or hutch.
+     * If the target pet is in the hutch, retrieve it first, then swap, then store the old pet back.
+     */
+    fun swapPet(sessionId: String, activePetId: String, targetPetId: String, targetIsInHutch: Boolean) {
+        val client = clients[sessionId] ?: return
+        val actions = client.actions
+
+        if (targetIsInHutch) {
+            actions.retrieveItemFromStorage(itemId = targetPetId, storageId = "PetHutch")
+        }
+
+        actions.swapPet(petSlotId = activePetId, petInventoryId = targetPetId)
+
+        // Store the old active pet back in hutch
+        actions.putItemInStorage(itemId = activePetId, storageId = "PetHutch")
+    }
+
+    /**
+     * Equip a pet from inventory/hutch into an empty active slot.
+     * Uses placePet with a garden dirt tile.
+     */
+    fun equipPet(sessionId: String, targetPetId: String, targetIsInHutch: Boolean) {
+        val client = clients[sessionId] ?: run {
+            Log.w(TAG, "[EquipPet] No client for session $sessionId")
+            return
+        }
+        val actions = client.actions
+
+        Log.d(TAG, "[EquipPet] petId=$targetPetId, isInHutch=$targetIsInHutch")
+
+        if (targetIsInHutch) {
+            Log.d(TAG, "[EquipPet] Retrieving from hutch first")
+            actions.retrieveItemFromStorage(itemId = targetPetId, storageId = "PetHutch")
+        }
+
+        // Place pet on a free dirt tile of our garden slot
+        val me = client.gameState.getPlayer(client.playerId)
+        val slotIndex = (me?.slotIndex ?: 0).coerceIn(0, 5)
+        val base = SLOT_BASE_TILE[slotIndex]
+
+        // Find which local indices (0,1,2) are occupied by active pets
+        val occupiedLocal = mutableSetOf<Int>()
+        val slotInfos = me?.petSlotInfos
+        Log.d(TAG, "[EquipPet] petSlotInfos = $slotInfos")
+        if (slotInfos != null) {
+            for ((_, infoEl) in slotInfos) {
+                val pos = (infoEl as? JsonObject)?.get("position") as? JsonObject ?: continue
+                val px = pos["x"]?.jsonPrimitive?.intOrNull ?: continue
+                // localIndex = px - baseX
+                val local = px - base.first
+                if (local in 0..2) occupiedLocal.add(local)
+            }
+        }
+
+        val freeLocal = (0..2).firstOrNull { it !in occupiedLocal } ?: 0
+        val x = base.first + freeLocal
+        val y = base.second
+        Log.d(TAG, "[EquipPet] slotIndex=$slotIndex, occupied=$occupiedLocal, freeLocal=$freeLocal, pos=($x,$y)")
+        actions.placePet(
+            itemId = targetPetId,
+            x = x.toDouble(), y = y.toDouble(),
+            tileType = "Dirt",
+            localTileIndex = freeLocal,
+        )
+    }
+
+    /** Base dirt tile (x, y) for each of the 6 player slots. Map is 101 cols, static layout. */
+    private val SLOT_BASE_TILE = arrayOf(
+        14 to 14,  // slot 0
+        40 to 14,  // slot 1
+        66 to 14,  // slot 2
+        14 to 36,  // slot 3
+        40 to 36,  // slot 4
+        66 to 36,  // slot 5
+    )
+
+    /** Finds a dirt tile in our garden that is not occupied by a pet. */
+    private fun findFreeDirtTile(client: RoomClient): DirtTile? {
+        val gs = client.gameState.gameState as? JsonObject
+        if (gs == null) { Log.w(TAG, "[FindTile] gameState is null"); return null }
+
+        val me = client.gameState.getPlayer(client.playerId)
+        if (me == null) { Log.w(TAG, "[FindTile] player not found for ${client.playerId}"); return null }
+
+        val slotIndex = me.slotIndex
+        if (slotIndex == null) { Log.w(TAG, "[FindTile] slotIndex is null"); return null }
+        Log.d(TAG, "[FindTile] slotIndex=$slotIndex")
+
+        // Read map data — map lives in roomState, not gameState
+        val rs = client.gameState.roomState as? JsonObject
+        val map = rs?.get("map") as? JsonObject
+            ?: gs["map"] as? JsonObject
+        if (map == null) {
+            Log.w(TAG, "[FindTile] map not found. roomState keys: ${rs?.keys?.take(20)}, gameState keys: ${gs.keys.take(20)}")
+            return null
+        }
+
+        val cols = map["cols"]?.jsonPrimitive?.intOrNull
+        if (cols == null) { Log.w(TAG, "[FindTile] map.cols is null. Map keys: ${map.keys.take(20)}"); return null }
+
+        val dirtArrays = map["userSlotIdxAndDirtTileIdxToGlobalTileIdx"] as? JsonArray
+        if (dirtArrays == null) { Log.w(TAG, "[FindTile] dirtArrays is null. Map keys: ${map.keys}"); return null }
+
+        val myDirtTiles = dirtArrays.getOrNull(slotIndex) as? JsonArray
+        if (myDirtTiles == null) { Log.w(TAG, "[FindTile] No dirt tiles for slot $slotIndex (array size=${dirtArrays.size})"); return null }
+        Log.d(TAG, "[FindTile] Found ${myDirtTiles.size} dirt tiles for slot $slotIndex")
+
+        // Collect positions occupied by active pets
+        val occupiedPositions = mutableSetOf<Pair<Int, Int>>()
+        val slotInfos = me.petSlotInfos
+        Log.d(TAG, "[FindTile] petSlotInfos keys: ${slotInfos?.keys}")
+        if (slotInfos != null) {
+            for ((key, infoEl) in slotInfos) {
+                val info = infoEl as? JsonObject ?: continue
+                val pos = info["position"] as? JsonObject ?: continue
+                val px = pos["x"]?.jsonPrimitive?.intOrNull ?: continue
+                val py = pos["y"]?.jsonPrimitive?.intOrNull ?: continue
+                Log.d(TAG, "[FindTile] Pet $key occupies tile ($px, $py)")
+                occupiedPositions.add(px to py)
+            }
+        }
+
+        // Find first dirt tile not occupied by a pet
+        for (localIndex in myDirtTiles.indices) {
+            val globalIndex = myDirtTiles[localIndex].jsonPrimitive.intOrNull ?: continue
+            val x = globalIndex % cols
+            val y = globalIndex / cols
+            if ((x to y) !in occupiedPositions) {
+                Log.d(TAG, "[FindTile] Free tile found: local=$localIndex, global=$globalIndex, pos=($x, $y)")
+                return DirtTile(x = x.toDouble(), y = y.toDouble(), localIndex = localIndex)
+            }
+        }
+
+        // Fallback: use first tile anyway
+        Log.w(TAG, "[FindTile] No free tile found, using fallback (first tile)")
+        val globalIndex = myDirtTiles.firstOrNull()?.jsonPrimitive?.intOrNull ?: return null
+        return DirtTile(
+            x = (globalIndex % cols).toDouble(),
+            y = (globalIndex / cols).toDouble(),
+            localIndex = 0,
+        )
+    }
+
+    private data class DirtTile(val x: Double, val y: Double, val localIndex: Int)
+
+    /**
+     * Remove an active pet (pickup + store in hutch).
+     */
+    fun unequipPet(sessionId: String, petId: String) {
+        val actions = clients[sessionId]?.actions ?: return
+        actions.pickupPet(petId = petId)
+        actions.putItemInStorage(itemId = petId, storageId = "PetHutch")
+    }
+
     // ---- Card collapse persistence ----
 
     fun setCardExpanded(key: String, expanded: Boolean) {
@@ -671,6 +838,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         hunger = pet.hunger,
                         index = pet.index,
                         mutations = pet.mutations,
+                        xp = pet.xp,
+                        targetScale = pet.targetScale,
+                        abilities = pet.abilities,
                     )
                 }
                 updateSession(sessionId) {
@@ -842,6 +1012,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         feedingTrough = troughCrops,
                     )
                 }
+                alertNotifier.checkFeedingTrough(troughCrops, _state.value.alerts)
             }
             is ClientEvent.EggsChanged -> {
                 val newEggs = event.eggs.map { tile ->
@@ -860,7 +1031,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val purchases = event.shopPurchases
                 val newShops = event.shops.map { shop ->
                     val initialStocks = shop.getItemStocks()
-                    val purchaseMap = purchases
+                    // Detect shop restock: if the timer went UP, the shop just restocked
+                    // and shopPurchases may be stale (reset arrives in a separate patch)
+                    val prevShop = previousShops.find { it.type == shop.type }
+                    val justRestocked = prevShop != null &&
+                        shop.secondsUntilRestock > (prevShop.secondsUntilRestock + 30)
+                    val purchaseMap = if (justRestocked) null else purchases
                         ?.get(shop.type)
                         ?.let { it as? JsonObject }
                         ?.get("purchases")

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mgafk.app.data.model.PurchaseMode
 import com.mgafk.app.data.model.ShopSnapshot
 import com.mgafk.app.data.repository.MgApi
 import com.mgafk.app.ui.components.AppCard
@@ -86,6 +87,7 @@ private val SHOP_SECTIONS = listOf(
 fun ShopsCards(
     shops: List<ShopSnapshot>,
     apiReady: Boolean = false,
+    purchaseMode: PurchaseMode = PurchaseMode.HYBRID,
     purchaseError: String = "",
     showTip: Boolean = false,
     onDismissTip: () -> Unit = {},
@@ -119,8 +121,13 @@ fun ShopsCards(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    val tipText = when (purchaseMode) {
+                        PurchaseMode.SINGLE -> "Tap an item to buy x1."
+                        PurchaseMode.BULK -> "Tap an item to buy all remaining stock."
+                        PurchaseMode.HYBRID -> "Tap an item to buy x1. Hold to buy all remaining stock."
+                    }
                     Text(
-                        text = "Tap an item to buy it. Hold to buy all remaining stock.",
+                        text = tipText,
                         fontSize = 11.sp,
                         color = Accent,
                         lineHeight = 15.sp,
@@ -166,6 +173,7 @@ fun ShopsCards(
             label = label,
             shop = shop,
             apiReady = apiReady,
+            purchaseMode = purchaseMode,
             onBuy = { itemName -> onBuy(key, itemName) },
             onBuyAll = { itemName -> onBuyAll(key, itemName) },
         )
@@ -178,6 +186,7 @@ private fun ShopCategoryCard(
     label: String,
     shop: ShopSnapshot?,
     apiReady: Boolean,
+    purchaseMode: PurchaseMode,
     onBuy: (itemName: String) -> Unit,
     onBuyAll: (itemName: String) -> Unit,
 ) {
@@ -207,6 +216,7 @@ private fun ShopCategoryCard(
                         inShop = initialStock > 0,
                         soldOut = remaining <= 0,
                         apiReady = apiReady,
+                        purchaseMode = purchaseMode,
                         onBuy = { onBuy(itemName) },
                         onBuyAll = { onBuyAll(itemName) },
                     )
@@ -223,6 +233,7 @@ private fun ShopItemTile(
     inShop: Boolean,
     soldOut: Boolean,
     apiReady: Boolean,
+    purchaseMode: PurchaseMode,
     onBuy: () -> Unit,
     onBuyAll: () -> Unit,
 ) {
@@ -244,11 +255,19 @@ private fun ShopItemTile(
                 .border(1.5.dp, borderColor, RoundedCornerShape(10.dp))
                 .background(SurfaceDark)
                 .then(
-                    if (!soldOut) Modifier.pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { onBuy() },
-                            onLongPress = { onBuyAll() },
-                        )
+                    if (!soldOut) when (purchaseMode) {
+                        PurchaseMode.SINGLE -> Modifier.pointerInput(Unit) {
+                            detectTapGestures(onTap = { onBuy() })
+                        }
+                        PurchaseMode.BULK -> Modifier.pointerInput(Unit) {
+                            detectTapGestures(onTap = { onBuyAll() })
+                        }
+                        PurchaseMode.HYBRID -> Modifier.pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { onBuy() },
+                                onLongPress = { onBuyAll() },
+                            )
+                        }
                     } else Modifier
                 )
                 .alpha(tileAlpha)

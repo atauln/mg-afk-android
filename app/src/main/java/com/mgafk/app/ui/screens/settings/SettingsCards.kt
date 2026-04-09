@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mgafk.app.data.model.AppSettings
+import com.mgafk.app.data.model.PurchaseMode
 import com.mgafk.app.data.model.WakeLockMode
 import com.mgafk.app.ui.components.AppCard
 import com.mgafk.app.ui.theme.Accent
@@ -51,6 +52,7 @@ fun SettingsCards(
     onUpdate: (AppSettings) -> Unit,
 ) {
     BackgroundCard(settings = settings, onUpdate = onUpdate)
+    ShopsSettingsCard(settings = settings, onUpdate = onUpdate)
     ReconnectionCard(settings = settings, onUpdate = onUpdate)
     DeveloperCard(settings = settings, onUpdate = onUpdate)
 }
@@ -199,6 +201,64 @@ private fun BackgroundCard(settings: AppSettings, onUpdate: (AppSettings) -> Uni
                 }
             }
         }
+    }
+}
+
+// ── Shops ──
+
+@Composable
+private fun ShopsSettingsCard(settings: AppSettings, onUpdate: (AppSettings) -> Unit) {
+    AppCard(title = "Shops", collapsible = true, persistKey = "settings_shops") {
+        Text("Purchase mode", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            PurchaseMode.entries.forEach { mode ->
+                val selected = mode == settings.purchaseMode
+                val label = when (mode) {
+                    PurchaseMode.SINGLE -> "Single"
+                    PurchaseMode.BULK -> "Bulk"
+                    PurchaseMode.HYBRID -> "Hybrid"
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(
+                            if (selected) Accent.copy(alpha = 0.12f)
+                            else SurfaceBorder.copy(alpha = 0.2f)
+                        )
+                        .then(
+                            if (selected) Modifier.border(1.dp, Accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            else Modifier.border(1.dp, SurfaceBorder.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                        )
+                        .clickable { onUpdate(settings.copy(purchaseMode = mode)) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 13.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) Accent else TextSecondary,
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        val hint = when (settings.purchaseMode) {
+            PurchaseMode.SINGLE -> "Tap buys x1 only."
+            PurchaseMode.BULK -> "Tap buys all remaining stock at once."
+            PurchaseMode.HYBRID -> "Tap buys x1, hold buys all remaining stock."
+        }
+        Text(hint, fontSize = 10.sp, color = TextMuted)
     }
 }
 

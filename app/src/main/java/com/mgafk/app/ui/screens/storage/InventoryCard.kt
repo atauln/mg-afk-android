@@ -7,14 +7,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,7 +50,6 @@ import com.mgafk.app.data.repository.PriceCalculator
 import com.mgafk.app.ui.components.AppCard
 import com.mgafk.app.ui.components.SpriteImage
 import com.mgafk.app.ui.theme.Accent
-import com.mgafk.app.ui.theme.StatusConnected
 import com.mgafk.app.ui.theme.SurfaceBorder
 import com.mgafk.app.ui.theme.SurfaceCard
 import com.mgafk.app.ui.theme.SurfaceDark
@@ -330,48 +328,73 @@ private fun PlantTile(item: InventoryPlantItem, apiReady: Boolean) {
     }
 }
 
-// ── Pets list ──
+// ── Pets grid (compact tiles, same style as pet selector) ──
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PetsList(pets: List<InventoryPetItem>, apiReady: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        pets.forEach { pet ->
-            val e = remember(pet.petSpecies, apiReady) { MgApi.findPet(pet.petSpecies) }
-            val name = pet.name ?: e?.name ?: pet.petSpecies
-            val color = rarityColor(e?.rarity)
-            val ms = maxStr(pet.petSpecies, pet.targetScale)
-            val cs = curStr(pet.petSpecies, pet.xp, ms)
-            val isMax = cs >= ms
+    GridOf(count = pets.size) { i ->
+        PetTile(pets[i], apiReady)
+    }
+}
 
+@Composable
+private fun PetTile(pet: InventoryPetItem, apiReady: Boolean) {
+    val entry = remember(pet.petSpecies, apiReady) { MgApi.findPet(pet.petSpecies) }
+    val name = pet.name?.ifBlank { null } ?: entry?.name ?: pet.petSpecies
+    val borderColor = rarityColor(entry?.rarity).copy(alpha = 0.5f)
+    val ms = maxStr(pet.petSpecies, pet.targetScale)
+    val cs = curStr(pet.petSpecies, pet.xp, ms)
+    val isMax = cs >= ms
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.5.dp, borderColor, RoundedCornerShape(10.dp))
+            .background(SurfaceDark),
+    ) {
+        // Mutation icons top-left
+        if (pet.mutations.isNotEmpty()) {
             Row(
-                modifier = Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .border(1.dp, color.copy(0.25f), RoundedCornerShape(10.dp))
-                    .background(SurfaceDark)
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.align(Alignment.TopStart).padding(5.dp),
+                horizontalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                SpriteImage(url = e?.sprite, size = 32.dp, contentDescription = name)
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    // Name + mutations + STR inline
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
-                        pet.mutations.forEach { SpriteImage(url = mutationSpriteUrl(it), size = 13.dp, contentDescription = it) }
-                        // STR inline, small
-                        val strText = if (isMax) "MAX $ms" else "$cs/$ms"
-                        val strCol = if (isMax) StatusConnected else TextMuted
-                        Text(strText, fontSize = 9.sp, fontWeight = FontWeight.Medium, color = strCol)
-                    }
-                    // Ability badges
-                    if (pet.abilities.isNotEmpty()) {
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            pet.abilities.forEach { id ->
-                                AbilityBadge(id, apiReady)
-                            }
-                        }
+                pet.mutations.take(2).forEach {
+                    SpriteImage(url = mutationSpriteUrl(it), size = 12.dp, contentDescription = it)
+                }
+            }
+        }
+        // STR top-right
+        if (ms > 0) {
+            val strText = if (isMax) "$cs" else "$cs/$ms"
+            val strColor = if (isMax) Color(0xFFFBBF24) else Accent
+            Text(
+                strText, fontSize = 7.sp, fontWeight = FontWeight.Bold,
+                color = strColor, lineHeight = 9.sp,
+                modifier = Modifier.align(Alignment.TopEnd).padding(5.dp),
+            )
+        }
+        // Center content
+        Column(
+            modifier = Modifier.align(Alignment.Center).padding(top = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            SpriteImage(category = "pets", name = pet.petSpecies, size = 28.dp, contentDescription = pet.petSpecies)
+            Text(
+                name, fontSize = 8.sp, fontWeight = FontWeight.Medium, color = TextPrimary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = 10.sp,
+            )
+            if (pet.abilities.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    pet.abilities.forEach { abilityId ->
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(abilityColor(abilityId)),
+                        )
                     }
                 }
             }
@@ -379,17 +402,41 @@ private fun PetsList(pets: List<InventoryPetItem>, apiReady: Boolean) {
     }
 }
 
-@Composable
-private fun AbilityBadge(abilityId: String, apiReady: Boolean) {
-    val entry = remember(abilityId, apiReady) { MgApi.getAbilities()[abilityId] }
-    val name = entry?.name ?: abilityId
-    val bg = remember(entry?.color) {
-        entry?.color?.let {
-            try { Color(android.graphics.Color.parseColor(it)) } catch (_: Exception) { null }
-        } ?: Color(0xFF646464)
+private fun abilityColor(abilityId: String): Color {
+    val id = abilityId.lowercase().replace(Regex("[\\s_-]+"), "")
+    return when {
+        id.startsWith("moonkisser") -> Color(0xFFFAA623)
+        id.startsWith("dawnkisser") -> Color(0xFFA25CF2)
+        id.startsWith("producescaleboost") || id.startsWith("snowycropsizeboost") -> Color(0xFF228B22)
+        id.startsWith("plantgrowthboost") || id.startsWith("snowyplantgrowthboost") ||
+            id.startsWith("dawnplantgrowthboost") || id.startsWith("amberplantgrowthboost") -> Color(0xFF008080)
+        id.startsWith("egggrowthboost") || id.startsWith("snowyegggrowthboost") -> Color(0xFFB45AF0)
+        id.startsWith("petageboost") -> Color(0xFF9370DB)
+        id.startsWith("pethatchsizeboost") -> Color(0xFF800080)
+        id.startsWith("petxpboost") || id.startsWith("snowypetxpboost") -> Color(0xFF1E90FF)
+        id.startsWith("hungerboost") || id.startsWith("snowyhungerboost") -> Color(0xFFFF1493)
+        id.startsWith("hungerrestore") || id.startsWith("snowyhungerrestore") -> Color(0xFFFF69B4)
+        id.startsWith("sellboost") -> Color(0xFFDC143C)
+        id.startsWith("coinfinder") || id.startsWith("snowycoinfinder") -> Color(0xFFB49600)
+        id.startsWith("seedfinder") -> Color(0xFFA86626)
+        id.startsWith("producemutationboost") || id.startsWith("snowycropmutationboost") ||
+            id.startsWith("dawnboost") || id.startsWith("ambermoonboost") -> Color(0xFF8C0F46)
+        id.startsWith("petmutationboost") -> Color(0xFFA03264)
+        id.startsWith("doubleharvest") -> Color(0xFF0078B4)
+        id.startsWith("doublehatch") -> Color(0xFF3C5AB4)
+        id.startsWith("produceeater") -> Color(0xFFFF4500)
+        id.startsWith("producerefund") -> Color(0xFFFF6347)
+        id.startsWith("petrefund") -> Color(0xFF005078)
+        id.startsWith("copycat") -> Color(0xFFFF8C00)
+        id.startsWith("goldgranter") -> Color(0xFFE1C837)
+        id.startsWith("rainbowgranter") -> Color(0xFF50AAAA)
+        id.startsWith("raindance") -> Color(0xFF4CCCCC)
+        id.startsWith("snowgranter") -> Color(0xFF90B8CC)
+        id.startsWith("frostgranter") -> Color(0xFF94A0CC)
+        id.startsWith("dawnlitgranter") -> Color(0xFFC47CB4)
+        id.startsWith("amberlitgranter") -> Color(0xFFCC9060)
+        else -> Color(0xFF646464)
     }
-    Text(name, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1,
-        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(bg.copy(0.85f)).padding(horizontal = 6.dp, vertical = 2.dp))
 }
 
 // ── Adaptive grid ──

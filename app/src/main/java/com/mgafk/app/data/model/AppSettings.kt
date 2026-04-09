@@ -13,6 +13,16 @@ enum class WakeLockMode {
 }
 
 @Serializable
+enum class PurchaseMode {
+    /** Tap buys x1, long-press buys all remaining stock. */
+    HYBRID,
+    /** Tap always buys x1. No bulk purchase. */
+    SINGLE,
+    /** Tap immediately buys all remaining stock. */
+    BULK,
+}
+
+@Serializable
 data class AppSettings(
     // Background & Battery
     val wifiLockEnabled: Boolean = true,
@@ -24,6 +34,9 @@ data class AppSettings(
     val retryMaxDelayMs: Long = 60000,
     val retrySupersededDelayMs: Long = 30000,
     val notifyOnDisconnect: Boolean = false,
+
+    // Shops
+    val purchaseMode: PurchaseMode = PurchaseMode.HYBRID,
 
     // Developer
     val showDebugMenu: Boolean = false,

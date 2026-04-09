@@ -2,6 +2,7 @@ package com.mgafk.app.ui.screens.logs
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,11 +26,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mgafk.app.data.model.AbilityFormatter
 import com.mgafk.app.data.model.AbilityLog
 import com.mgafk.app.data.repository.MgApi
 import com.mgafk.app.ui.components.AppCard
@@ -38,9 +42,24 @@ import com.mgafk.app.ui.theme.Accent
 import com.mgafk.app.ui.theme.SurfaceBorder
 import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
+import com.mgafk.app.ui.theme.TextPrimary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** Parse ability color string into a Brush (gradient or solid). Same logic as PetHungerCard. */
+private fun parseAbilityBrush(raw: String?): Brush {
+    if (raw == null) return SolidColor(Color(0xFF646464))
+    val hexPattern = Regex("#[0-9A-Fa-f]{6}")
+    val hexColors = hexPattern.findAll(raw).mapNotNull { match ->
+        try { Color(android.graphics.Color.parseColor(match.value)) } catch (_: Exception) { null }
+    }.toList()
+    if (hexColors.size >= 2 && raw.contains("gradient", ignoreCase = true)) {
+        return Brush.linearGradient(hexColors)
+    }
+    if (hexColors.isNotEmpty()) return SolidColor(hexColors.first())
+    return try { SolidColor(Color(android.graphics.Color.parseColor(raw))) } catch (_: Exception) { SolidColor(Color(0xFF646464)) }
+}
 
 @Composable
 fun AbilityLogsCard(
@@ -58,10 +77,12 @@ fun AbilityLogsCard(
             val q = query.trim().lowercase()
             logs.filter { log ->
                 val abilityName = MgApi.abilityDisplayName(log.action).lowercase()
+                val description = AbilityFormatter.format(log)?.lowercase().orEmpty()
                 abilityName.contains(q) ||
                     log.action.lowercase().contains(q) ||
                     log.petName.lowercase().contains(q) ||
-                    log.petSpecies.lowercase().contains(q)
+                    log.petSpecies.lowercase().contains(q) ||
+                    description.contains(q)
             }
         }
     }
@@ -129,7 +150,11 @@ fun AbilityLogsCard(
 
 @Composable
 private fun LogRow(log: AbilityLog, dateFormat: SimpleDateFormat, apiReady: Boolean) {
-    val abilityName = remember(log.action, apiReady) { MgApi.abilityDisplayName(log.action) }
+    val entry = remember(log.action, apiReady) { MgApi.getAbilities()[log.action] }
+    val abilityName = entry?.name ?: log.action
+    val abilityBrush = remember(entry?.color) { parseAbilityBrush(entry?.color) }
+    val description = remember(log.action, log.params) { AbilityFormatter.format(log) }
+    val petLabel = log.petName.ifBlank { log.petSpecies }
 
     Row(
         modifier = Modifier
@@ -141,21 +166,46 @@ private fun LogRow(log: AbilityLog, dateFormat: SimpleDateFormat, apiReady: Bool
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (log.petSpecies.isNotBlank()) {
-            SpriteImage(category = "pets", name = log.petSpecies, size = 24.dp, contentDescription = log.petSpecies)
+            SpriteImage(category = "pets", name = log.petSpecies, size = 36.dp, contentDescription = log.petSpecies)
             Spacer(modifier = Modifier.width(8.dp))
         }
 
-        Column(modifier = Modifier.weight(1f)) {
-            Text(abilityName, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Accent)
-            if (log.petName.isNotBlank()) {
-                Text("${log.petName} · ${log.petSpecies}", fontSize = 11.sp, color = TextMuted)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            // Ability badge + timestamp
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    abilityName,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(abilityBrush, alpha = 0.85f)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = dateFormat.format(Date(log.timestamp)),
+                    fontSize = 10.sp,
+                    color = TextMuted,
+                )
+            }
+
+            // "PetName description" e.g. "Snail found 25552 coins"
+            if (description != null) {
+                Text(
+                    "$petLabel $description",
+                    fontSize = 11.sp,
+                    color = Color.White.copy(alpha = 0.75f),
+                )
             }
         }
-
-        Text(
-            text = dateFormat.format(Date(log.timestamp)),
-            fontSize = 10.sp,
-            color = TextMuted,
-        )
     }
 }

@@ -387,8 +387,62 @@ class RoomClient {
             val action = entry["action"]?.jsonPrimitive?.contentOrNull
             if (!Constants.isAbilityName(action)) continue
 
-            val pet = entry["parameters"]?.let { it as? JsonObject }
-                ?.get("pet")?.let { it as? JsonObject }
+            val parameters = entry["parameters"]?.let { it as? JsonObject }
+            val pet = parameters?.get("pet")?.let { it as? JsonObject }
+
+            // Extract flat params map for AbilityFormatter descriptions
+            val params = buildMap<String, String> {
+                if (parameters != null) {
+                    for ((key, value) in parameters) {
+                        if (key == "pet") {
+                            // Flatten pet id for self-check
+                            pet?.get("id")?.jsonPrimitive?.contentOrNull?.let { put("petId", it) }
+                            continue
+                        }
+                        when {
+                            key == "targetPet" -> {
+                                val target = value as? JsonObject
+                                target?.get("name")?.jsonPrimitive?.contentOrNull?.let { put("targetPetName", it) }
+                                target?.get("petSpecies")?.jsonPrimitive?.contentOrNull?.let { put("targetPetSpecies", it) }
+                                target?.get("id")?.jsonPrimitive?.contentOrNull?.let { put("targetPetId", it) }
+                            }
+                            key == "harvestedCrop" -> {
+                                val crop = value as? JsonObject
+                                crop?.get("species")?.jsonPrimitive?.contentOrNull?.let { put("harvestedCropSpecies", it) }
+                            }
+                            key == "extraPet" -> {
+                                val extra = value as? JsonObject
+                                extra?.get("petSpecies")?.jsonPrimitive?.contentOrNull?.let { put("extraPetSpecies", it) }
+                            }
+                            key == "growSlot" -> {
+                                val slot = value as? JsonObject
+                                slot?.get("species")?.jsonPrimitive?.contentOrNull?.let { put("growSlotSpecies", it) }
+                            }
+                            key == "cropsRefunded" -> {
+                                val arr = value as? JsonArray
+                                put("cropsRefundedCount", (arr?.size ?: 0).toString())
+                            }
+                            key == "petsAffected" -> {
+                                val arr = value as? JsonArray
+                                put("petsAffectedCount", (arr?.size ?: 0).toString())
+                            }
+                            key == "eggsAffected" -> {
+                                val arr = value as? JsonArray
+                                put("eggsAffectedCount", (arr?.size ?: 0).toString())
+                            }
+                            else -> {
+                                // Store primitive values as strings
+                                try {
+                                    val content = value.jsonPrimitive.contentOrNull
+                                    if (content != null) put(key, content)
+                                } catch (_: IllegalArgumentException) {
+                                    // Skip non-primitive values (arrays, objects)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             newEntries.add(
                 AbilityLog(
@@ -397,6 +451,7 @@ class RoomClient {
                     petName = pet?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     petSpecies = pet?.get("petSpecies")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     slotIndex = me.slotIndex ?: 0,
+                    params = params,
                 )
             )
         }

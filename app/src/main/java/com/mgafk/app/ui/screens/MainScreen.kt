@@ -90,7 +90,7 @@ import com.mgafk.app.ui.screens.storage.FeedingTroughCard
 import com.mgafk.app.ui.screens.storage.InventoryCard
 import com.mgafk.app.ui.screens.storage.PetHutchCard
 import com.mgafk.app.ui.screens.storage.SeedSiloCard
-import com.mgafk.app.ui.screens.pets.PetHungerCard
+import com.mgafk.app.ui.screens.pets.ActivePetsCard
 import com.mgafk.app.ui.screens.shops.ShopsCards
 import com.mgafk.app.ui.screens.status.LiveStatusCard
 import com.mgafk.app.ui.theme.Accent
@@ -543,12 +543,25 @@ private fun SectionContent(
             EggsCard(eggs = session.gardenEggs, apiReady = state.apiReady)
         }
         NavSection.PETS -> {
-            PetHungerCard(
+            ActivePetsCard(
                 pets = session.pets,
                 produce = session.inventory.produce,
+                inventoryPets = session.inventory.pets,
+                hutchPets = session.petHutch,
                 apiReady = state.apiReady,
+                showTip = state.showPetTip,
+                onDismissTip = { viewModel.dismissPetTip() },
                 onFeedPet = { petItemId, cropItemIds ->
                     viewModel.feedPet(session.id, petItemId, cropItemIds)
+                },
+                onSwapPet = { activePetId, targetPetId, isInHutch ->
+                    viewModel.swapPet(session.id, activePetId, targetPetId, isInHutch)
+                },
+                onEquipPet = { targetPetId, isInHutch ->
+                    viewModel.equipPet(session.id, targetPetId, isInHutch)
+                },
+                onUnequipPet = { petId ->
+                    viewModel.unequipPet(session.id, petId)
                 },
             )
             AbilityLogsCard(logs = session.logs, apiReady = state.apiReady, onClear = { viewModel.clearLogs(session.id) })
@@ -557,6 +570,7 @@ private fun SectionContent(
             ShopsCards(
                 shops = session.shops,
                 apiReady = state.apiReady,
+                purchaseMode = state.settings.purchaseMode,
                 purchaseError = state.purchaseError,
                 showTip = state.showShopTip,
                 onDismissTip = { viewModel.dismissShopTip() },
@@ -602,6 +616,11 @@ private fun SectionContent(
                 onCollapseChange = { key, collapsed ->
                     viewModel.updateAlerts { config ->
                         config.copy(collapsed = config.collapsed + (key to collapsed))
+                    }
+                },
+                onPetThresholdChange = { threshold ->
+                    viewModel.updateAlerts { config ->
+                        config.copy(petHungerThreshold = threshold)
                     }
                 },
             )

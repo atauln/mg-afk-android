@@ -189,10 +189,17 @@ data class PetInfo(
     val hunger: Double,
     val index: Int,
     val mutations: List<String>,
+    val xp: Double = 0.0,
+    val targetScale: Double = 1.0,
+    val abilities: List<String> = emptyList(),
 ) {
     companion object {
         fun fromJson(obj: JsonObject, index: Int): PetInfo {
             val mutations = (obj["mutations"] as? JsonArray)
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?.filter { it.isNotBlank() }
+                ?: emptyList()
+            val abilities = (obj["abilities"] as? JsonArray)
                 ?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 ?.filter { it.isNotBlank() }
                 ?: emptyList()
@@ -203,6 +210,9 @@ data class PetInfo(
                 hunger = obj["hunger"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
                 index = index,
                 mutations = mutations,
+                xp = obj["xp"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                targetScale = obj["targetScale"]?.jsonPrimitive?.doubleOrNull ?: 1.0,
+                abilities = abilities,
             )
         }
     }

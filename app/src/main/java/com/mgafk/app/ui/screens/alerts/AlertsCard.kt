@@ -23,9 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -78,6 +80,9 @@ private val WEATHER_ITEMS = listOf(
 )
 
 private const val HUNGER_KEY = "hunger<5"
+private const val TROUGH_KEY = "trough_low"
+
+private val HUNGER_THRESHOLDS = listOf(5, 10, 15, 20, 25)
 
 private val SHOP_CATEGORIES = listOf(
     "Seeds" to "seed",
@@ -86,7 +91,7 @@ private val SHOP_CATEGORIES = listOf(
     "Decors" to "decor",
 )
 
-/** Emits 3 separate collapsible cards with per-section mode. */
+/** Emits 4 separate collapsible cards with per-section mode. */
 @Composable
 fun AlertsCards(
     alerts: AlertConfig,
@@ -94,6 +99,7 @@ fun AlertsCards(
     onToggle: (key: String, enabled: Boolean) -> Unit,
     onSectionModeChange: (AlertSection, AlertMode) -> Unit,
     onCollapseChange: (key: String, collapsed: Boolean) -> Unit,
+    onPetThresholdChange: (Int) -> Unit,
 ) {
     if (!apiReady) {
         AppCard {
@@ -114,7 +120,8 @@ fun AlertsCards(
     } else {
         ShopAlertsCard(alerts, onToggle, alerts.isExpanded("shop_alerts"), onCollapseChange, alerts.modeFor(AlertSection.SHOP)) { onSectionModeChange(AlertSection.SHOP, it) }
         WeatherAlertsCard(alerts, onToggle, alerts.isExpanded("weather_alerts"), onCollapseChange, alerts.modeFor(AlertSection.WEATHER)) { onSectionModeChange(AlertSection.WEATHER, it) }
-        PetAlertsCard(alerts, onToggle, alerts.isExpanded("pet_alerts"), onCollapseChange, alerts.modeFor(AlertSection.PET)) { onSectionModeChange(AlertSection.PET, it) }
+        PetAlertsCard(alerts, onToggle, alerts.isExpanded("pet_alerts"), onCollapseChange, alerts.modeFor(AlertSection.PET), onPetThresholdChange) { onSectionModeChange(AlertSection.PET, it) }
+        FeedingTroughAlertsCard(alerts, onToggle, alerts.isExpanded("trough_alerts"), onCollapseChange, alerts.modeFor(AlertSection.FEEDING_TROUGH)) { onSectionModeChange(AlertSection.FEEDING_TROUGH, it) }
     }
 }
 
@@ -326,11 +333,13 @@ private fun WeatherAlertsCard(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     Text(displayName, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = enabled,
-                        onCheckedChange = { onToggle(key, it) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Accent),
-                    )
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                        Switch(
+                            checked = enabled,
+                            onCheckedChange = { onToggle(key, it) },
+                            colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+                        )
+                    }
                 }
             }
         }
@@ -346,9 +355,11 @@ private fun PetAlertsCard(
     expanded: Boolean,
     onCollapseChange: (String, Boolean) -> Unit,
     currentMode: AlertMode,
+    onThresholdChange: (Int) -> Unit,
     onModeChange: (AlertMode) -> Unit,
 ) {
     val enabled = alerts.items[HUNGER_KEY]?.enabled == true
+    val threshold = alerts.petHungerThreshold
 
     AppCard(
         title = "Pet Alerts",
@@ -369,37 +380,157 @@ private fun PetAlertsCard(
     ) {
         SectionModePicker(currentMode = currentMode, onModeChange = onModeChange)
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
                 .background(SurfaceBorder.copy(alpha = 0.2f))
-                .padding(horizontal = 10.dp, vertical = 4.dp),
+                .padding(horizontal = 10.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Hunger < 5%",
+                "Hunger < $threshold%",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = TextPrimary,
                 modifier = Modifier.weight(1f),
             )
-            Switch(
-                checked = enabled,
-                onCheckedChange = { onToggle(HUNGER_KEY, it) },
-                colors = SwitchDefaults.colors(checkedTrackColor = Accent),
-            )
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onToggle(HUNGER_KEY, it) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
 
+        ThresholdPicker(
+            label = "Threshold",
+            values = HUNGER_THRESHOLDS,
+            selected = threshold,
+            format = { "$it%" },
+            onSelect = onThresholdChange,
+        )
+
+        Spacer(modifier = Modifier.height(2.dp))
+
         Text(
-            "Get notified when any pet drops below 5% hunger.",
+            "Get notified when any pet drops below $threshold% hunger.",
             fontSize = 11.sp,
             color = TextMuted,
         )
+    }
+}
+
+// ── Feeding Trough Alerts ──
+
+@Composable
+private fun FeedingTroughAlertsCard(
+    alerts: AlertConfig,
+    onToggle: (String, Boolean) -> Unit,
+    expanded: Boolean,
+    onCollapseChange: (String, Boolean) -> Unit,
+    currentMode: AlertMode,
+    onModeChange: (AlertMode) -> Unit,
+) {
+    val enabled = alerts.items[TROUGH_KEY]?.enabled == true
+
+    AppCard(
+        title = "Feeding Trough Alerts",
+        collapsible = true,
+        expanded = expanded,
+        onExpandedChange = { onCollapseChange("trough_alerts", !it) },
+        trailing = {
+            if (enabled) {
+                Text(
+                    text = "1 active",
+                    fontSize = 11.sp,
+                    color = Accent,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            }
+        },
+    ) {
+        SectionModePicker(currentMode = currentMode, onModeChange = onModeChange)
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(SurfaceBorder.copy(alpha = 0.2f))
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Trough low (≤ 1 item)",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onToggle(TROUGH_KEY, it) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(2.dp))
+
+        Text(
+            "Get notified when the feeding trough has 1 or fewer items.",
+            fontSize = 11.sp,
+            color = TextMuted,
+        )
+    }
+}
+
+// ── Threshold picker (reusable) ──
+
+@Composable
+private fun ThresholdPicker(
+    label: String,
+    values: List<Int>,
+    selected: Int,
+    format: (Int) -> String,
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("$label:", fontSize = 11.sp, color = TextMuted)
+        values.forEach { value ->
+            val isSelected = value == selected
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) Accent.copy(alpha = 0.12f) else SurfaceBorder.copy(alpha = 0.2f))
+                    .then(
+                        if (isSelected) Modifier.border(1.dp, Accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        else Modifier.border(1.dp, SurfaceBorder.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    )
+                    .clickable { onSelect(value) }
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    text = format(value),
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) Accent else TextMuted,
+                )
+            }
+        }
     }
 }
 

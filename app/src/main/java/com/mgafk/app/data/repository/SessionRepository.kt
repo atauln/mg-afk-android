@@ -26,6 +26,7 @@ class SessionRepository(private val context: Context) {
         private val KEY_ALERTS = stringPreferencesKey("mgafk.alerts")
         private val KEY_SHOP_TIP = booleanPreferencesKey("mgafk.shopTipDismissed")
         private val KEY_TROUGH_TIP = booleanPreferencesKey("mgafk.troughTipDismissed")
+        private val KEY_PET_TIP = booleanPreferencesKey("mgafk.petTipDismissed")
         private val KEY_COLLAPSED_CARDS = stringPreferencesKey("mgafk.collapsedCards")
         private val KEY_SETTINGS = stringPreferencesKey("mgafk.settings")
     }
@@ -41,7 +42,15 @@ class SessionRepository(private val context: Context) {
     }
 
     suspend fun saveSessions(sessions: List<Session>) {
-        val serializable = sessions.map { it.copy(connected = false, busy = false, wsLogs = emptyList()) }
+        val serializable = sessions.map {
+            it.copy(
+                connected = false,
+                busy = false,
+                status = com.mgafk.app.data.model.SessionStatus.IDLE,
+                connectedAt = 0,
+                wsLogs = emptyList(),
+            )
+        }
         context.dataStore.edit { prefs ->
             prefs[KEY_SESSIONS] = json.encodeToString(serializable)
         }
@@ -90,6 +99,16 @@ class SessionRepository(private val context: Context) {
     suspend fun dismissTroughTip() {
         context.dataStore.edit { prefs ->
             prefs[KEY_TROUGH_TIP] = true
+        }
+    }
+
+    suspend fun isPetTipDismissed(): Boolean {
+        return context.dataStore.data.map { it[KEY_PET_TIP] ?: false }.first()
+    }
+
+    suspend fun dismissPetTip() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_PET_TIP] = true
         }
     }
 

@@ -69,6 +69,9 @@ data class PetSnapshot(
     val hunger: Double = 0.0,
     val index: Int = 0,
     val mutations: List<String> = emptyList(),
+    val xp: Double = 0.0,
+    val targetScale: Double = 1.0,
+    val abilities: List<String> = emptyList(),
 )
 
 @Serializable
@@ -80,6 +83,7 @@ data class AbilityLog(
     val petSpecies: String = "",
     val petMutations: List<String> = emptyList(),
     val slotIndex: Int = 0,
+    val params: Map<String, String> = emptyMap(),
 )
 
 /** Inventory snapshot */
