@@ -86,14 +86,13 @@ private val SHOP_CATEGORIES = listOf(
     "Decors" to "decor",
 )
 
-/** Emits 3 separate collapsible cards with per-section mode + Debug. */
+/** Emits 3 separate collapsible cards with per-section mode. */
 @Composable
 fun AlertsCards(
     alerts: AlertConfig,
     apiReady: Boolean,
     onToggle: (key: String, enabled: Boolean) -> Unit,
     onSectionModeChange: (AlertSection, AlertMode) -> Unit,
-    onTestAlert: (AlertMode) -> Unit,
     onCollapseChange: (key: String, collapsed: Boolean) -> Unit,
 ) {
     if (!apiReady) {
@@ -117,77 +116,10 @@ fun AlertsCards(
         WeatherAlertsCard(alerts, onToggle, alerts.isExpanded("weather_alerts"), onCollapseChange, alerts.modeFor(AlertSection.WEATHER)) { onSectionModeChange(AlertSection.WEATHER, it) }
         PetAlertsCard(alerts, onToggle, alerts.isExpanded("pet_alerts"), onCollapseChange, alerts.modeFor(AlertSection.PET)) { onSectionModeChange(AlertSection.PET, it) }
     }
-
-    DebugAlertsCard(onTestAlert = onTestAlert, expanded = alerts.isExpanded("debug", defaultExpanded = false), onCollapseChange = onCollapseChange)
 }
 
 private fun AlertConfig.isExpanded(key: String, defaultExpanded: Boolean = true): Boolean =
     if (key in collapsed) collapsed[key] != true else defaultExpanded
-
-// ── Debug ──
-
-@Composable
-private fun DebugAlertsCard(
-    onTestAlert: (AlertMode) -> Unit,
-    expanded: Boolean,
-    onCollapseChange: (String, Boolean) -> Unit,
-) {
-    AppCard(
-        title = "Debug",
-        collapsible = true,
-        expanded = expanded,
-        onExpandedChange = { onCollapseChange("debug", !it) },
-    ) {
-        Text(
-            "Simulate alerts without waiting for game events.",
-            fontSize = 11.sp,
-            color = TextMuted,
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Accent.copy(alpha = 0.10f))
-                    .border(1.dp, Accent.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
-                    .clickable { onTestAlert(AlertMode.NOTIFICATION) }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "Test Notification",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Accent,
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFFF87171).copy(alpha = 0.10f))
-                    .border(1.dp, Color(0xFFF87171).copy(alpha = 0.3f), RoundedCornerShape(10.dp))
-                    .clickable { onTestAlert(AlertMode.ALARM) }
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "Test Alarm",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFFF87171),
-                )
-            }
-        }
-    }
-}
 
 // ── Compact mode picker (reused inside each card) ──
 

@@ -2,6 +2,10 @@ package com.mgafk.app.ui
 
 import android.app.Application
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import coil.imageLoader
 import coil.request.ImageRequest
@@ -9,6 +13,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mgafk.app.data.model.AlertConfig
 import com.mgafk.app.data.model.AlertMode
+import com.mgafk.app.data.model.AppSettings
+import com.mgafk.app.data.model.WakeLockMode
 import com.mgafk.app.data.model.ChatMessage
 import com.mgafk.app.data.model.PlayerSnapshot
 import com.mgafk.app.data.model.GardenEggSnapshot
@@ -52,6 +58,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+private fun WakeLockMode.toServiceMode(): Int = when (this) {
+    WakeLockMode.OFF -> AfkService.MODE_OFF
+    WakeLockMode.SMART -> AfkService.MODE_SMART
+    WakeLockMode.ALWAYS -> AfkService.MODE_ALWAYS
+}
+
 data class UiState(
     val sessions: List<Session> = listOf(Session()),
     val activeSessionId: String = "",
@@ -64,6 +76,8 @@ data class UiState(
     val purchaseError: String = "",
     val showShopTip: Boolean = false,
     val showTroughTip: Boolean = false,
+    val settings: AppSettings = AppSettings(),
+    val serviceLogs: List<AfkService.ServiceLog> = emptyList(),
 ) {
     val activeSession: Session
         get() = sessions.find { it.id == activeSessionId } ?: sessions.first()
@@ -75,11 +89,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val clients = mutableMapOf<String, RoomClient>()
     private val collectorJobs = mutableMapOf<String, Job>()
     private var serviceRunning = false
+    private val connectivityManager =
+        application.getSystemService(ConnectivityManager::class.java)
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            // Network just came back — force immediate retry on all reconnecting clients
+            clients.forEach { (_, client) -> client.retryNow() }
+        }
+    }
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
+        val networkRequest = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback)
         viewModelScope.launch {
             val sessions = repo.loadSessions().ifEmpty { listOf(Session()) }
             val activeId = repo.loadActiveSessionId() ?: sessions.first().id
@@ -87,6 +114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val collapsedCards = repo.loadCollapsedCards()
             val shopTipDismissed = repo.isShopTipDismissed()
             val troughTipDismissed = repo.isTroughTipDismissed()
+            val settings = repo.loadSettings()
             _state.value = UiState(
                 sessions = sessions,
                 activeSessionId = activeId,
@@ -94,7 +122,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 collapsedCards = collapsedCards,
                 showShopTip = !shopTipDismissed,
                 showTroughTip = !troughTipDismissed,
+                settings = settings,
             )
+            // Collect service logs (wake lock events etc.)
+            launch {
+                AfkService.logs.collect { log ->
+                    _state.update { s ->
+                        s.copy(serviceLogs = (listOf(log) + s.serviceLogs).take(100))
+                    }
+                }
+            }
             // Preload ALL API data + sprites at startup
             launch {
                 _state.update { it.copy(loadingStep = "Loading game data…") }
@@ -155,6 +192,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (serviceRunning) return
         val app = getApplication<Application>()
         val intent = Intent(app, AfkService::class.java)
+            .putExtra(AfkService.EXTRA_WIFI_LOCK, _state.value.settings.wifiLockEnabled)
+            .putExtra(AfkService.EXTRA_WAKE_LOCK_MODE, _state.value.settings.wakeLockMode.toServiceMode())
+            .putExtra(AfkService.EXTRA_WAKE_LOCK_DELAY_MIN, _state.value.settings.wakeLockAutoDelayMin)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             app.startForegroundService(intent)
         } else {
@@ -201,12 +241,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .removePrefix("http://")
                     .ifBlank { "magicgarden.gg" }
 
+                val s = _state.value.settings
+                val reconnectWithSettings = session.reconnect.copy(
+                    delays = session.reconnect.delays.copy(
+                        otherMs = s.retryDelayMs,
+                        supersededMs = s.retrySupersededDelayMs,
+                        maxDelayMs = s.retryMaxDelayMs,
+                    ),
+                )
                 client.connect(
                     version = version,
                     cookie = session.cookie,
                     room = session.room,
                     host = host,
-                    reconnect = session.reconnect,
+                    reconnect = reconnectWithSettings,
                 )
             } catch (e: Exception) {
                 updateSession(sessionId) {
@@ -245,6 +293,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearLogs(sessionId: String) {
         updateSession(sessionId) { it.copy(logs = emptyList()) }
+    }
+
+    fun clearWsLogs(sessionId: String) {
+        updateSession(sessionId) { it.copy(wsLogs = emptyList()) }
+    }
+
+    fun clearServiceLogs() {
+        _state.update { it.copy(serviceLogs = emptyList()) }
     }
 
     // Optimistic purchase: decrement stock locally, send to server, rollback if no confirmation
@@ -489,6 +545,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { repo.saveAlerts(_state.value.alerts) }
     }
 
+    fun updateSettings(transform: (AppSettings) -> AppSettings) {
+        val newSettings = transform(_state.value.settings)
+        _state.update { it.copy(settings = newSettings) }
+        viewModelScope.launch { repo.saveSettings(newSettings) }
+        applySettings(newSettings)
+    }
+
+    private fun applySettings(settings: AppSettings) {
+        // Update AfkService locks if service is running
+        if (serviceRunning) {
+            val app = getApplication<Application>()
+            val intent = Intent(app, AfkService::class.java)
+                .putExtra(AfkService.EXTRA_WIFI_LOCK, settings.wifiLockEnabled)
+                .putExtra(AfkService.EXTRA_WAKE_LOCK_MODE, settings.wakeLockMode.toServiceMode())
+                .putExtra(AfkService.EXTRA_WAKE_LOCK_DELAY_MIN, settings.wakeLockAutoDelayMin)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                app.startForegroundService(intent)
+            } else {
+                app.startService(intent)
+            }
+        }
+        // Update reconnect config on all active clients
+        val reconnectDelays = com.mgafk.app.data.model.ReconnectDelays(
+            supersededMs = settings.retrySupersededDelayMs,
+            otherMs = settings.retryDelayMs,
+            maxDelayMs = settings.retryMaxDelayMs,
+        )
+        clients.values.forEach { client ->
+            client.reconnectConfig = client.reconnectConfig.copy(delays = reconnectDelays)
+        }
+    }
+
     fun testAlert(mode: AlertMode) {
         alertNotifier.testAlert(mode)
     }
@@ -520,6 +608,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleClientEvent(sessionId: String, event: ClientEvent) {
         when (event) {
             is ClientEvent.StatusChanged -> {
+                val logDetail = buildString {
+                    if (event.code != null) append("code=${event.code}")
+                    if (event.message.isNotBlank()) {
+                        if (isNotEmpty()) append(" ")
+                        append(event.message)
+                    }
+                    if (event.retry > 0) append(" retry=${event.retry}/${event.maxRetries}")
+                    if (event.retryInMs > 0) append(" delay=${event.retryInMs}ms")
+                }
+                val wsLog = com.mgafk.app.data.model.WsLog(
+                    timestamp = System.currentTimeMillis(),
+                    level = if (event.status == SessionStatus.ERROR) "error" else "info",
+                    event = "status → ${event.status.name}",
+                    detail = logDetail,
+                )
+                val previousSession = _state.value.sessions.find { it.id == sessionId }
+                val wasConnected = previousSession?.connected == true
                 updateSession(sessionId) {
                     it.copy(
                         status = event.status,
@@ -529,7 +634,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         playerId = event.playerId.ifBlank { it.playerId },
                         room = event.room.ifBlank { it.room },
                         connectedAt = if (event.status == SessionStatus.CONNECTED) System.currentTimeMillis() else 0,
+                        wsLogs = (listOf(wsLog) + it.wsLogs).take(100),
                     )
+                }
+                // Disconnect / reconnect notifications
+                if (_state.value.settings.notifyOnDisconnect && previousSession != null) {
+                    val name = previousSession.name
+                    if (wasConnected && event.status != SessionStatus.CONNECTED) {
+                        alertNotifier.notifyDisconnect(name, event.code, event.message.ifBlank { "Connection lost" })
+                    } else if (event.status == SessionStatus.CONNECTED) {
+                        alertNotifier.cancelDisconnectNotification(name)
+                    }
                 }
             }
             is ClientEvent.PlayersChanged -> {
@@ -780,7 +895,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is ClientEvent.PlayersListChanged -> {
                 updateSession(sessionId) { it.copy(playersList = event.players) }
             }
-            is ClientEvent.DebugLog -> { /* Could be stored for dev tools */ }
+            is ClientEvent.DebugLog -> {
+                updateSession(sessionId) {
+                    val entry = com.mgafk.app.data.model.WsLog(
+                        timestamp = System.currentTimeMillis(),
+                        level = event.level,
+                        event = event.message,
+                        detail = event.detail,
+                    )
+                    it.copy(wsLogs = (listOf(entry) + it.wsLogs).take(100))
+                }
+            }
         }
     }
 
@@ -792,6 +917,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
         collectorJobs.values.forEach { it.cancel() }
         collectorJobs.clear()
         clients.values.forEach { it.dispose() }

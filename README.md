@@ -35,8 +35,11 @@ drawer. Sections:
 | Garden | Garden plants and eggs overview |
 | Storage | Inventory, feeding trough (add/remove items) |
 | Alerts | Notification config (shops, weather, pets) |
+| Settings | Background & battery, reconnection, developer options |
+| Debug | WebSocket logs, service logs, alert testing |
 
 Sections that require an active connection are greyed out when offline.
+The Debug section is hidden by default and can be enabled in Settings.
 
 ## Multiple accounts
 
@@ -46,10 +49,16 @@ reconnect settings.
 
 ## Background & lock screen
 
-The app runs in the background even when the phone is locked. The WebSocket
-connection stays alive so you never miss an update. Alerts and notifications
-are delivered regardless of whether the screen is on or the app is in the
-foreground.
+The app runs in the background even when the phone is locked using a
+foreground service. A Wi-Fi lock keeps the network active and an optional
+CPU wake lock (off, smart, or always) prevents the system from sleeping
+during long AFK sessions. The smart mode automatically enables the CPU lock
+after the phone has been locked for a configurable delay and releases it on
+unlock.
+
+If the WebSocket disconnects, the app retries indefinitely with exponential
+backoff and reconnects immediately when the network comes back. An optional
+notification can alert you when a session loses connection.
 
 ## Alerts
 

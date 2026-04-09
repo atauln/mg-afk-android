@@ -118,6 +118,24 @@ class AlertNotifier(private val context: Context) {
         stopGlobalAlarm()
     }
 
+    // ── Disconnect notification ──
+
+    private val DISCONNECT_NOTIFICATION_ID = 999
+
+    fun notifyDisconnect(sessionName: String, code: Int?, reason: String) {
+        val body = if (code != null) "Code $code — $reason" else reason
+        val builder = NotificationCompat.Builder(context, MgAfkApp.CHANNEL_ALERTS)
+            .setContentTitle("$sessionName disconnected")
+            .setContentText(body)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setAutoCancel(true)
+        manager.notify(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode(), builder.build())
+    }
+
+    fun cancelDisconnectNotification(sessionName: String) {
+        manager.cancel(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode())
+    }
+
     fun cleanup() {
         handler.removeCallbacksAndMessages(null)
         pendingAlarmItems.clear()

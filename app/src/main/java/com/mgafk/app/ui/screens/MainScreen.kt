@@ -34,6 +34,8 @@ import androidx.compose.material.icons.outlined.Grass
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.Pets
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
@@ -75,6 +77,8 @@ import com.mgafk.app.ui.MainViewModel
 import com.mgafk.app.ui.components.CardCollapseState
 import com.mgafk.app.ui.components.LocalCardCollapseState
 import com.mgafk.app.ui.screens.alerts.AlertsCards
+import com.mgafk.app.ui.screens.debug.DebugCards
+import com.mgafk.app.ui.screens.settings.SettingsCards
 import com.mgafk.app.ui.screens.connection.ConnectionCard
 import com.mgafk.app.ui.screens.room.ChatCard
 import com.mgafk.app.ui.screens.room.PlayersCard
@@ -118,6 +122,8 @@ enum class NavSection(
     GARDEN("Garden", Icons.Outlined.Grass, requiresConnection = true),
     SHOPS("Shops", Icons.Outlined.ShoppingCart, requiresConnection = true),
     ALERTS("Alerts", Icons.Outlined.Notifications),
+    SETTINGS("Settings", Icons.Outlined.Settings),
+    DEBUG("Debug", Icons.Outlined.BugReport),
 }
 
 // ── Main Screen ──
@@ -175,6 +181,7 @@ fun MainScreen(
                     connected = session.connected,
                     playerName = session.playerName,
                     updateAvailable = state.updateAvailable,
+                    showDebugMenu = state.settings.showDebugMenu,
                     onSelect = { section ->
                         currentSection = section.name
                         scope.launch { drawerState.snapTo(DrawerValue.Closed) }
@@ -292,6 +299,7 @@ private fun DrawerContent(
     connected: Boolean,
     playerName: String,
     updateAvailable: com.mgafk.app.data.repository.AppRelease?,
+    showDebugMenu: Boolean,
     onSelect: (NavSection) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -379,7 +387,7 @@ private fun DrawerContent(
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Alerts — pinned at bottom, separated
+        // Alerts, Settings & Debug — pinned at bottom
         HorizontalDivider(color = SurfaceBorder, thickness = 1.dp)
         Spacer(modifier = Modifier.height(4.dp))
         DrawerItem(
@@ -389,6 +397,22 @@ private fun DrawerContent(
             enabled = true,
             onClick = { onSelect(NavSection.ALERTS) },
         )
+        DrawerItem(
+            icon = NavSection.SETTINGS.icon,
+            label = NavSection.SETTINGS.label,
+            selected = selected == NavSection.SETTINGS,
+            enabled = true,
+            onClick = { onSelect(NavSection.SETTINGS) },
+        )
+        if (showDebugMenu) {
+            DrawerItem(
+                icon = NavSection.DEBUG.icon,
+                label = NavSection.DEBUG.label,
+                selected = selected == NavSection.DEBUG,
+                enabled = true,
+                onClick = { onSelect(NavSection.DEBUG) },
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
     }
 }
@@ -575,12 +599,26 @@ private fun SectionContent(
                         config.copy(sectionModes = config.sectionModes + (section.key to mode))
                     }
                 },
-                onTestAlert = { mode -> viewModel.testAlert(mode) },
                 onCollapseChange = { key, collapsed ->
                     viewModel.updateAlerts { config ->
                         config.copy(collapsed = config.collapsed + (key to collapsed))
                     }
                 },
+            )
+        }
+        NavSection.SETTINGS -> {
+            SettingsCards(
+                settings = state.settings,
+                onUpdate = { newSettings -> viewModel.updateSettings { newSettings } },
+            )
+        }
+        NavSection.DEBUG -> {
+            DebugCards(
+                session = session,
+                serviceLogs = state.serviceLogs,
+                onTestAlert = { mode -> viewModel.testAlert(mode) },
+                onClearWsLogs = { viewModel.clearWsLogs(session.id) },
+                onClearServiceLogs = { viewModel.clearServiceLogs() },
             )
         }
     }

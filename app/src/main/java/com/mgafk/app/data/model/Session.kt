@@ -36,6 +36,7 @@ data class Session(
     val chatMessages: List<ChatMessage> = emptyList(),
     val playersList: List<PlayerSnapshot> = emptyList(),
     val gameVersion: String = "",
+    val wsLogs: List<WsLog> = emptyList(),
 )
 
 @Serializable
@@ -56,6 +57,7 @@ data class ReconnectConfig(
 data class ReconnectDelays(
     val supersededMs: Long = 30000,
     val otherMs: Long = 1500,
+    val maxDelayMs: Long = 60000,
 )
 
 /** Serializable snapshot of a pet for Session persistence */
@@ -200,4 +202,13 @@ data class ShopSnapshot(
     val itemStocks: Map<String, Int> = emptyMap(),
     val initialStocks: Map<String, Int> = emptyMap(),
     val secondsUntilRestock: Int = 0,
+)
+
+/** WebSocket debug log entry */
+@Serializable
+data class WsLog(
+    val timestamp: Long = System.currentTimeMillis(),
+    val level: String = "info",
+    val event: String = "",
+    val detail: String = "",
 )

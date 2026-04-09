@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mgafk.app.data.model.AlertConfig
+import com.mgafk.app.data.model.AppSettings
 import com.mgafk.app.data.model.Session
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -26,6 +27,7 @@ class SessionRepository(private val context: Context) {
         private val KEY_SHOP_TIP = booleanPreferencesKey("mgafk.shopTipDismissed")
         private val KEY_TROUGH_TIP = booleanPreferencesKey("mgafk.troughTipDismissed")
         private val KEY_COLLAPSED_CARDS = stringPreferencesKey("mgafk.collapsedCards")
+        private val KEY_SETTINGS = stringPreferencesKey("mgafk.settings")
     }
 
     suspend fun loadSessions(): List<Session> {
@@ -39,7 +41,7 @@ class SessionRepository(private val context: Context) {
     }
 
     suspend fun saveSessions(sessions: List<Session>) {
-        val serializable = sessions.map { it.copy(connected = false, busy = false) }
+        val serializable = sessions.map { it.copy(connected = false, busy = false, wsLogs = emptyList()) }
         context.dataStore.edit { prefs ->
             prefs[KEY_SESSIONS] = json.encodeToString(serializable)
         }
@@ -104,6 +106,22 @@ class SessionRepository(private val context: Context) {
     suspend fun saveCollapsedCards(collapsed: Map<String, Boolean>) {
         context.dataStore.edit { prefs ->
             prefs[KEY_COLLAPSED_CARDS] = json.encodeToString(collapsed)
+        }
+    }
+
+    suspend fun loadSettings(): AppSettings {
+        val raw = context.dataStore.data.map { it[KEY_SETTINGS] }.first()
+        if (raw.isNullOrBlank()) return AppSettings()
+        return try {
+            json.decodeFromString<AppSettings>(raw)
+        } catch (_: Exception) {
+            AppSettings()
+        }
+    }
+
+    suspend fun saveSettings(settings: AppSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_SETTINGS] = json.encodeToString(settings)
         }
     }
 }

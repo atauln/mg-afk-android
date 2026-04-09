@@ -123,7 +123,6 @@ class RoomClient {
     private var hasEverWelcomed = false
     private var initialConnectFastRetry = false
     var reconnectConfig = ReconnectConfig()
-        private set
 
     // Last connect options for retry
     private var lastConnectOpts: ConnectOptions? = null
@@ -332,11 +331,17 @@ class RoomClient {
             welcomed = true
             connectedAt = System.currentTimeMillis()
             state = "connected"
+            val wasRetry = retryCount > 0
             retryCount = 0
             retryCode = null
             hasEverWelcomed = true
             initialConnectFastRetry = false
             cancelRetryJob()
+            emit(ClientEvent.DebugLog(
+                "info",
+                if (wasRetry) "reconnected" else "connected",
+                "room=$room player=$playerId",
+            ))
             emitStatus(SessionStatus.CONNECTED, room = room, playerId = playerId)
         }
     }
@@ -467,9 +472,10 @@ class RoomClient {
             max(0, reconnectConfig.delays.otherMs)
         }
         val base = max(configuredDelay, Constants.RETRY_DELAY_MS)
+        val maxDelay = max(reconnectConfig.delays.maxDelayMs, Constants.RETRY_DELAY_MS)
         val backoff = min(
             base * 2.0.pow(max(0, retryCount - 1).toDouble()).toLong(),
-            Constants.RETRY_MAX_DELAY_MS,
+            maxDelay,
         )
         val jitter = (Math.random() * Constants.RETRY_JITTER_MS).toLong()
         return backoff + jitter
@@ -484,21 +490,29 @@ class RoomClient {
         if (!isInitial && !shouldReconnect(code)) return false
         if (lastConnectOpts == null) return false
         retryCode = code
-        if (retryCount >= maxRetries) return false
+        if (retryCount >= maxRetries) {
+            emit(ClientEvent.DebugLog("warn", "retries exhausted", "max=${if (maxRetries == Int.MAX_VALUE) "∞" else "$maxRetries"} code=$code"))
+            return false
+        }
         retryCount++
         val attempt = retryCount
         val delayMs = if (isInitial) 0L else getReconnectDelay(code)
 
         state = "connecting"
-        emitStatus(
-            SessionStatus.CONNECTING,
-            message = "Reconnecting ($attempt/$maxRetries)...",
+        val displayMax = if (maxRetries == Int.MAX_VALUE) "\u221E" else "$maxRetries"
+        emit(ClientEvent.StatusChanged(
+            status = SessionStatus.CONNECTING,
+            message = "Reconnecting ($attempt/$displayMax)...",
             code = code,
-        )
+            retry = attempt,
+            maxRetries = maxRetries,
+            retryInMs = delayMs,
+        ))
 
         cancelRetryJob()
         retryJob = scope.launch {
             if (delayMs > 0) delay(delayMs)
+            emit(ClientEvent.DebugLog("info", "reconnect attempt", "attempt=$attempt/$displayMax code=$code"))
             val opts = lastConnectOpts ?: return@launch
             try {
                 connect(
@@ -510,10 +524,37 @@ class RoomClient {
                     isRetry = true,
                 )
             } catch (e: Exception) {
+                emit(ClientEvent.DebugLog("error", "reconnect failed", e.message ?: e.toString()))
                 emitStatus(SessionStatus.ERROR, message = e.message ?: e.toString())
             }
         }
         return true
+    }
+
+    /**
+     * Called when network becomes available again — skip the current retry delay
+     * and reconnect immediately if we're in a retry cycle.
+     */
+    fun retryNow() {
+        if (state != "connecting" || lastConnectOpts == null) return
+        emit(ClientEvent.DebugLog("info", "network back", "forcing immediate retry"))
+        cancelRetryJob()
+        retryJob = scope.launch {
+            val opts = lastConnectOpts ?: return@launch
+            try {
+                connect(
+                    version = opts.version,
+                    cookie = opts.cookie,
+                    room = opts.room,
+                    host = opts.host,
+                    userAgent = opts.userAgent,
+                    isRetry = true,
+                )
+            } catch (e: Exception) {
+                emit(ClientEvent.DebugLog("error", "reconnect failed", e.message ?: e.toString()))
+                emitStatus(SessionStatus.ERROR, message = e.message ?: e.toString())
+            }
+        }
     }
 
     private fun cancelRetryJob() {
