@@ -32,7 +32,10 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Grass
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.MeetingRoom
 import androidx.compose.material.icons.outlined.Pets
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
@@ -45,6 +48,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -70,8 +74,14 @@ import com.mgafk.app.data.model.AlertSection
 import com.mgafk.app.data.model.Session
 import com.mgafk.app.data.model.SessionStatus
 import com.mgafk.app.ui.MainViewModel
+import com.mgafk.app.ui.components.CardCollapseState
+import com.mgafk.app.ui.components.LocalCardCollapseState
 import com.mgafk.app.ui.screens.alerts.AlertsCards
+import com.mgafk.app.ui.screens.debug.DebugCards
+import com.mgafk.app.ui.screens.settings.SettingsCards
 import com.mgafk.app.ui.screens.connection.ConnectionCard
+import com.mgafk.app.ui.screens.room.ChatCard
+import com.mgafk.app.ui.screens.room.PlayersCard
 import com.mgafk.app.ui.screens.logs.AbilityLogsCard
 import com.mgafk.app.ui.screens.garden.EggsCard
 import com.mgafk.app.ui.screens.garden.GardenCard
@@ -80,7 +90,7 @@ import com.mgafk.app.ui.screens.storage.FeedingTroughCard
 import com.mgafk.app.ui.screens.storage.InventoryCard
 import com.mgafk.app.ui.screens.storage.PetHutchCard
 import com.mgafk.app.ui.screens.storage.SeedSiloCard
-import com.mgafk.app.ui.screens.pets.PetHungerCard
+import com.mgafk.app.ui.screens.pets.ActivePetsCard
 import com.mgafk.app.ui.screens.shops.ShopsCards
 import com.mgafk.app.ui.screens.status.LiveStatusCard
 import com.mgafk.app.ui.theme.Accent
@@ -106,11 +116,14 @@ enum class NavSection(
     val requiresConnection: Boolean = false,
 ) {
     DASHBOARD("Dashboard", Icons.Outlined.Dashboard),
+    ROOM("Room", Icons.Outlined.MeetingRoom, requiresConnection = true),
     PETS("Pets", Icons.Outlined.Pets, requiresConnection = true),
     STORAGE("Storage", Icons.Outlined.Inventory2, requiresConnection = true),
     GARDEN("Garden", Icons.Outlined.Grass, requiresConnection = true),
     SHOPS("Shops", Icons.Outlined.ShoppingCart, requiresConnection = true),
     ALERTS("Alerts", Icons.Outlined.Notifications),
+    SETTINGS("Settings", Icons.Outlined.Settings),
+    DEBUG("Debug", Icons.Outlined.BugReport),
 }
 
 // ── Main Screen ──
@@ -150,6 +163,14 @@ fun MainScreen(
         }
     }
 
+    val cardCollapseState = remember(state.collapsedCards) {
+        CardCollapseState(
+            collapsedCards = state.collapsedCards,
+            onExpandedChange = { key, expanded -> viewModel.setCardExpanded(key, expanded) },
+        )
+    }
+
+    CompositionLocalProvider(LocalCardCollapseState provides cardCollapseState) {
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -160,6 +181,7 @@ fun MainScreen(
                     connected = session.connected,
                     playerName = session.playerName,
                     updateAvailable = state.updateAvailable,
+                    showDebugMenu = state.settings.showDebugMenu,
                     onSelect = { section ->
                         currentSection = section.name
                         scope.launch { drawerState.snapTo(DrawerValue.Closed) }
@@ -227,6 +249,7 @@ fun MainScreen(
             LoadingOverlay(step = loadingStep)
         }
     }
+    } // CompositionLocalProvider
 }
 
 // ── Loading overlay ──
@@ -276,6 +299,7 @@ private fun DrawerContent(
     connected: Boolean,
     playerName: String,
     updateAvailable: com.mgafk.app.data.repository.AppRelease?,
+    showDebugMenu: Boolean,
     onSelect: (NavSection) -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -363,7 +387,7 @@ private fun DrawerContent(
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Alerts — pinned at bottom, separated
+        // Alerts, Settings & Debug — pinned at bottom
         HorizontalDivider(color = SurfaceBorder, thickness = 1.dp)
         Spacer(modifier = Modifier.height(4.dp))
         DrawerItem(
@@ -373,6 +397,22 @@ private fun DrawerContent(
             enabled = true,
             onClick = { onSelect(NavSection.ALERTS) },
         )
+        DrawerItem(
+            icon = NavSection.SETTINGS.icon,
+            label = NavSection.SETTINGS.label,
+            selected = selected == NavSection.SETTINGS,
+            enabled = true,
+            onClick = { onSelect(NavSection.SETTINGS) },
+        )
+        if (showDebugMenu) {
+            DrawerItem(
+                icon = NavSection.DEBUG.icon,
+                label = NavSection.DEBUG.label,
+                selected = selected == NavSection.DEBUG,
+                enabled = true,
+                onClick = { onSelect(NavSection.DEBUG) },
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
     }
 }
@@ -484,23 +524,78 @@ private fun SectionContent(
                 onRemove = { viewModel.removeSession(session.id) },
             )
         }
+        NavSection.ROOM -> {
+            PlayersCard(
+                players = session.playersList,
+                gameVersion = session.gameVersion,
+                gameHost = session.gameUrl,
+            )
+            ChatCard(
+                messages = session.chatMessages,
+                players = session.playersList,
+                gameVersion = session.gameVersion,
+                gameHost = session.gameUrl,
+                onSend = { message -> viewModel.sendChat(session.id, message) },
+            )
+        }
         NavSection.GARDEN -> {
             GardenCard(plants = session.garden, apiReady = state.apiReady)
             EggsCard(eggs = session.gardenEggs, apiReady = state.apiReady)
         }
         NavSection.PETS -> {
-            PetHungerCard(pets = session.pets)
+            ActivePetsCard(
+                pets = session.pets,
+                produce = session.inventory.produce,
+                inventoryPets = session.inventory.pets,
+                hutchPets = session.petHutch,
+                apiReady = state.apiReady,
+                showTip = state.showPetTip,
+                onDismissTip = { viewModel.dismissPetTip() },
+                onFeedPet = { petItemId, cropItemIds ->
+                    viewModel.feedPet(session.id, petItemId, cropItemIds)
+                },
+                onSwapPet = { activePetId, targetPetId, isInHutch ->
+                    viewModel.swapPet(session.id, activePetId, targetPetId, isInHutch)
+                },
+                onEquipPet = { targetPetId, isInHutch ->
+                    viewModel.equipPet(session.id, targetPetId, isInHutch)
+                },
+                onUnequipPet = { petId ->
+                    viewModel.unequipPet(session.id, petId)
+                },
+            )
             AbilityLogsCard(logs = session.logs, apiReady = state.apiReady, onClear = { viewModel.clearLogs(session.id) })
         }
         NavSection.SHOPS -> {
-            ShopsCards(shops = session.shops, apiReady = state.apiReady)
+            ShopsCards(
+                shops = session.shops,
+                apiReady = state.apiReady,
+                purchaseMode = state.settings.purchaseMode,
+                purchaseError = state.purchaseError,
+                showTip = state.showShopTip,
+                onDismissTip = { viewModel.dismissShopTip() },
+                onBuy = { shopType, itemName -> viewModel.purchaseShopItem(session.id, shopType, itemName) },
+                onBuyAll = { shopType, itemName -> viewModel.purchaseAllShopItem(session.id, shopType, itemName) },
+            )
         }
         NavSection.STORAGE -> {
             InventoryCard(inventory = session.inventory, apiReady = state.apiReady)
             SeedSiloCard(seeds = session.seedSilo, apiReady = state.apiReady)
             DecorShedCard(decors = session.decorShed, apiReady = state.apiReady)
             PetHutchCard(pets = session.petHutch, apiReady = state.apiReady)
-            FeedingTroughCard(eggs = session.feedingTrough, apiReady = state.apiReady)
+            FeedingTroughCard(
+                crops = session.feedingTrough,
+                produce = session.inventory.produce,
+                apiReady = state.apiReady,
+                showTip = state.showTroughTip,
+                onDismissTip = { viewModel.dismissTroughTip() },
+                onAddItems = { items ->
+                    viewModel.putItemsInFeedingTrough(session.id, items)
+                },
+                onRemoveItem = { itemId ->
+                    viewModel.removeItemFromFeedingTrough(session.id, itemId)
+                },
+            )
         }
         NavSection.ALERTS -> {
             AlertsCards(
@@ -518,12 +613,31 @@ private fun SectionContent(
                         config.copy(sectionModes = config.sectionModes + (section.key to mode))
                     }
                 },
-                onTestAlert = { mode -> viewModel.testAlert(mode) },
                 onCollapseChange = { key, collapsed ->
                     viewModel.updateAlerts { config ->
                         config.copy(collapsed = config.collapsed + (key to collapsed))
                     }
                 },
+                onPetThresholdChange = { threshold ->
+                    viewModel.updateAlerts { config ->
+                        config.copy(petHungerThreshold = threshold)
+                    }
+                },
+            )
+        }
+        NavSection.SETTINGS -> {
+            SettingsCards(
+                settings = state.settings,
+                onUpdate = { newSettings -> viewModel.updateSettings { newSettings } },
+            )
+        }
+        NavSection.DEBUG -> {
+            DebugCards(
+                session = session,
+                serviceLogs = state.serviceLogs,
+                onTestAlert = { mode -> viewModel.testAlert(mode) },
+                onClearWsLogs = { viewModel.clearWsLogs(session.id) },
+                onClearServiceLogs = { viewModel.clearServiceLogs() },
             )
         }
     }

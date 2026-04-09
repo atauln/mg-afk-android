@@ -2,6 +2,8 @@ package com.mgafk.app.data.websocket
 
 import android.util.Log
 import com.mgafk.app.data.model.AbilityLog
+import com.mgafk.app.data.model.ChatMessage
+import com.mgafk.app.data.model.PlayerSnapshot
 import com.mgafk.app.data.model.ReconnectConfig
 import com.mgafk.app.data.model.SessionStatus
 import com.mgafk.app.data.websocket.state.GameState
@@ -58,10 +60,12 @@ sealed class ClientEvent {
         val pets: List<PetInfo>,
     ) : ClientEvent()
 
-    data class ShopsChanged(val shops: List<ShopModel>) : ClientEvent()
+    data class ShopsChanged(val shops: List<ShopModel>, val shopPurchases: JsonObject? = null) : ClientEvent()
     data class GardenChanged(val plants: List<GardenTile>) : ClientEvent()
     data class EggsChanged(val eggs: List<GardenTile>) : ClientEvent()
     data class InventoryChanged(val items: JsonArray, val storages: JsonArray) : ClientEvent()
+    data class ChatChanged(val messages: List<ChatMessage>) : ClientEvent()
+    data class PlayersListChanged(val players: List<PlayerSnapshot>) : ClientEvent()
     data class DebugLog(val level: String, val message: String, val detail: String = "") : ClientEvent()
 }
 
@@ -109,6 +113,8 @@ class RoomClient {
     private var lastEggsPayload: ClientEvent.EggsChanged? = null
     private var lastInventorySize: Int = -1
     private var lastAbilityTimestamp = 0L
+    private var lastChatSize = -1
+    private var lastPlayersPayload: ClientEvent.PlayersListChanged? = null
 
     // Retry state
     private var retryCount = 0
@@ -117,7 +123,6 @@ class RoomClient {
     private var hasEverWelcomed = false
     private var initialConnectFastRetry = false
     var reconnectConfig = ReconnectConfig()
-        private set
 
     // Last connect options for retry
     private var lastConnectOpts: ConnectOptions? = null
@@ -319,16 +324,24 @@ class RoomClient {
         emitGarden()
         emitEggs()
         emitInventory()
+        emitChat()
+        emitPlayersList()
 
         if (!welcomed) {
             welcomed = true
             connectedAt = System.currentTimeMillis()
             state = "connected"
+            val wasRetry = retryCount > 0
             retryCount = 0
             retryCode = null
             hasEverWelcomed = true
             initialConnectFastRetry = false
             cancelRetryJob()
+            emit(ClientEvent.DebugLog(
+                "info",
+                if (wasRetry) "reconnected" else "connected",
+                "room=$room player=$playerId",
+            ))
             emitStatus(SessionStatus.CONNECTED, room = room, playerId = playerId)
         }
     }
@@ -355,6 +368,8 @@ class RoomClient {
         emitGarden()
         emitEggs()
         emitInventory()
+        emitChat()
+        emitPlayersList()
     }
 
     private fun emitNewAbilityLogs() {
@@ -372,8 +387,62 @@ class RoomClient {
             val action = entry["action"]?.jsonPrimitive?.contentOrNull
             if (!Constants.isAbilityName(action)) continue
 
-            val pet = entry["parameters"]?.let { it as? JsonObject }
-                ?.get("pet")?.let { it as? JsonObject }
+            val parameters = entry["parameters"]?.let { it as? JsonObject }
+            val pet = parameters?.get("pet")?.let { it as? JsonObject }
+
+            // Extract flat params map for AbilityFormatter descriptions
+            val params = buildMap<String, String> {
+                if (parameters != null) {
+                    for ((key, value) in parameters) {
+                        if (key == "pet") {
+                            // Flatten pet id for self-check
+                            pet?.get("id")?.jsonPrimitive?.contentOrNull?.let { put("petId", it) }
+                            continue
+                        }
+                        when {
+                            key == "targetPet" -> {
+                                val target = value as? JsonObject
+                                target?.get("name")?.jsonPrimitive?.contentOrNull?.let { put("targetPetName", it) }
+                                target?.get("petSpecies")?.jsonPrimitive?.contentOrNull?.let { put("targetPetSpecies", it) }
+                                target?.get("id")?.jsonPrimitive?.contentOrNull?.let { put("targetPetId", it) }
+                            }
+                            key == "harvestedCrop" -> {
+                                val crop = value as? JsonObject
+                                crop?.get("species")?.jsonPrimitive?.contentOrNull?.let { put("harvestedCropSpecies", it) }
+                            }
+                            key == "extraPet" -> {
+                                val extra = value as? JsonObject
+                                extra?.get("petSpecies")?.jsonPrimitive?.contentOrNull?.let { put("extraPetSpecies", it) }
+                            }
+                            key == "growSlot" -> {
+                                val slot = value as? JsonObject
+                                slot?.get("species")?.jsonPrimitive?.contentOrNull?.let { put("growSlotSpecies", it) }
+                            }
+                            key == "cropsRefunded" -> {
+                                val arr = value as? JsonArray
+                                put("cropsRefundedCount", (arr?.size ?: 0).toString())
+                            }
+                            key == "petsAffected" -> {
+                                val arr = value as? JsonArray
+                                put("petsAffectedCount", (arr?.size ?: 0).toString())
+                            }
+                            key == "eggsAffected" -> {
+                                val arr = value as? JsonArray
+                                put("eggsAffectedCount", (arr?.size ?: 0).toString())
+                            }
+                            else -> {
+                                // Store primitive values as strings
+                                try {
+                                    val content = value.jsonPrimitive.contentOrNull
+                                    if (content != null) put(key, content)
+                                } catch (_: IllegalArgumentException) {
+                                    // Skip non-primitive values (arrays, objects)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             newEntries.add(
                 AbilityLog(
@@ -382,6 +451,7 @@ class RoomClient {
                     petName = pet?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     petSpecies = pet?.get("petSpecies")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     slotIndex = me.slotIndex ?: 0,
+                    params = params,
                 )
             )
         }
@@ -457,9 +527,10 @@ class RoomClient {
             max(0, reconnectConfig.delays.otherMs)
         }
         val base = max(configuredDelay, Constants.RETRY_DELAY_MS)
+        val maxDelay = max(reconnectConfig.delays.maxDelayMs, Constants.RETRY_DELAY_MS)
         val backoff = min(
             base * 2.0.pow(max(0, retryCount - 1).toDouble()).toLong(),
-            Constants.RETRY_MAX_DELAY_MS,
+            maxDelay,
         )
         val jitter = (Math.random() * Constants.RETRY_JITTER_MS).toLong()
         return backoff + jitter
@@ -474,21 +545,29 @@ class RoomClient {
         if (!isInitial && !shouldReconnect(code)) return false
         if (lastConnectOpts == null) return false
         retryCode = code
-        if (retryCount >= maxRetries) return false
+        if (retryCount >= maxRetries) {
+            emit(ClientEvent.DebugLog("warn", "retries exhausted", "max=${if (maxRetries == Int.MAX_VALUE) "∞" else "$maxRetries"} code=$code"))
+            return false
+        }
         retryCount++
         val attempt = retryCount
         val delayMs = if (isInitial) 0L else getReconnectDelay(code)
 
         state = "connecting"
-        emitStatus(
-            SessionStatus.CONNECTING,
-            message = "Reconnecting ($attempt/$maxRetries)...",
+        val displayMax = if (maxRetries == Int.MAX_VALUE) "\u221E" else "$maxRetries"
+        emit(ClientEvent.StatusChanged(
+            status = SessionStatus.CONNECTING,
+            message = "Reconnecting ($attempt/$displayMax)...",
             code = code,
-        )
+            retry = attempt,
+            maxRetries = maxRetries,
+            retryInMs = delayMs,
+        ))
 
         cancelRetryJob()
         retryJob = scope.launch {
             if (delayMs > 0) delay(delayMs)
+            emit(ClientEvent.DebugLog("info", "reconnect attempt", "attempt=$attempt/$displayMax code=$code"))
             val opts = lastConnectOpts ?: return@launch
             try {
                 connect(
@@ -500,10 +579,37 @@ class RoomClient {
                     isRetry = true,
                 )
             } catch (e: Exception) {
+                emit(ClientEvent.DebugLog("error", "reconnect failed", e.message ?: e.toString()))
                 emitStatus(SessionStatus.ERROR, message = e.message ?: e.toString())
             }
         }
         return true
+    }
+
+    /**
+     * Called when network becomes available again — skip the current retry delay
+     * and reconnect immediately if we're in a retry cycle.
+     */
+    fun retryNow() {
+        if (state != "connecting" || lastConnectOpts == null) return
+        emit(ClientEvent.DebugLog("info", "network back", "forcing immediate retry"))
+        cancelRetryJob()
+        retryJob = scope.launch {
+            val opts = lastConnectOpts ?: return@launch
+            try {
+                connect(
+                    version = opts.version,
+                    cookie = opts.cookie,
+                    room = opts.room,
+                    host = opts.host,
+                    userAgent = opts.userAgent,
+                    isRetry = true,
+                )
+            } catch (e: Exception) {
+                emit(ClientEvent.DebugLog("error", "reconnect failed", e.message ?: e.toString()))
+                emitStatus(SessionStatus.ERROR, message = e.message ?: e.toString())
+            }
+        }
     }
 
     private fun cancelRetryJob() {
@@ -552,7 +658,8 @@ class RoomClient {
     private fun emitShops() {
         val shops = gameState.getAllShops()
         if (shops.isEmpty()) return
-        val payload = ClientEvent.ShopsChanged(shops)
+        val me = gameState.getPlayer(playerId)
+        val payload = ClientEvent.ShopsChanged(shops, me?.shopPurchases)
         if (payload == lastShopsPayload) return
         lastShopsPayload = payload
         emit(payload)
@@ -583,6 +690,63 @@ class RoomClient {
         val payload = ClientEvent.EggsChanged(eggs)
         if (payload == lastEggsPayload) return
         lastEggsPayload = payload
+        emit(payload)
+    }
+
+    private fun emitChat() {
+        val room = gameState.getRoom() ?: return
+        val chatObj = room.chat ?: return
+        val messagesArr = chatObj["messages"] as? JsonArray ?: return
+        if (messagesArr.size == lastChatSize) return
+        lastChatSize = messagesArr.size
+
+        // Build player name lookup from room players
+        val playerNames = mutableMapOf<String, String>()
+        val roomData = gameState.roomState as? JsonObject
+        val players = roomData?.get("players") as? JsonArray
+        players?.forEach { el ->
+            val obj = el as? JsonObject ?: return@forEach
+            val pid = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+            val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+            playerNames[pid] = name
+        }
+
+        val messages = messagesArr.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val pid = obj["playerId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            ChatMessage(
+                timestamp = obj["timestamp"]?.jsonPrimitive?.longOrNull ?: 0L,
+                playerId = pid,
+                playerName = playerNames[pid].orEmpty(),
+                message = obj["message"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
+        }
+        emit(ClientEvent.ChatChanged(messages))
+    }
+
+    private fun emitPlayersList() {
+        val allPlayers = gameState.getAllPlayers()
+        if (allPlayers.isEmpty()) return
+
+        val snapshots = allPlayers.map { player ->
+            val cosmetic = player.cosmetic
+            val avatar = cosmetic?.get("avatar") as? JsonArray
+            val color = cosmetic?.get("color")?.jsonPrimitive?.contentOrNull.orEmpty()
+            PlayerSnapshot(
+                id = player.id,
+                name = player.name,
+                isConnected = player.isConnected,
+                coins = player.coins,
+                color = color,
+                avatarBottom = avatar?.getOrNull(0)?.jsonPrimitive?.contentOrNull.orEmpty(),
+                avatarMid = avatar?.getOrNull(1)?.jsonPrimitive?.contentOrNull.orEmpty(),
+                avatarTop = avatar?.getOrNull(2)?.jsonPrimitive?.contentOrNull.orEmpty(),
+                avatarExpression = avatar?.getOrNull(3)?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
+        }
+        val payload = ClientEvent.PlayersListChanged(snapshots)
+        if (payload == lastPlayersPayload) return
+        lastPlayersPayload = payload
         emit(payload)
     }
 

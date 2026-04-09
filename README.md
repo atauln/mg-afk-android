@@ -1,9 +1,11 @@
 # MG AFK Android
 
-MG AFK Android is a lightweight, read-only mobile app that lets you stay
-connected to Magic Garden without launching the game. It keeps a session open
-to display pet ability logs, shop inventory, weather and more while minimizing
-battery usage. No in-game actions are performed.
+MG AFK Android is a lightweight mobile app that lets you stay connected to
+Magic Garden without launching the game. It keeps a session open to display pet
+ability logs, shop inventory, weather and more while minimizing battery usage.
+You can also interact directly from the app: buy items from shops, chat with
+other players in the room, manage your feeding trough, feed your pets, and
+swap or equip pets from your inventory.
 
 ## How it works
 
@@ -26,13 +28,19 @@ Swipe from the left edge or tap the hamburger menu to open the navigation
 drawer. Sections:
 
 | Section | Content |
-|-----------|---------------------------------------------|
+|-----------|-------------------------------------------------------|
 | Dashboard | Connection setup + live status |
-| Pets | Pet hunger bars + ability logs |
-| Shops | Current seed / tool / egg / decor inventory |
-| Alerts | Notification config (shops, weather, pets) |
+| Room | Chat with players in the room |
+| Pets | Pet hunger, STR, abilities, feed/swap/equip, ability logs |
+| Shops | Buy seeds / tools / eggs / decors (single, bulk, hybrid modes) |
+| Garden | Garden plants and eggs overview |
+| Storage | Inventory, feeding trough (add/remove items) |
+| Alerts | Notification config (shops, weather, pets, feeding trough) |
+| Settings | Background & battery, reconnection, purchase mode, developer options |
+| Debug | WebSocket logs, service logs, alert testing |
 
 Sections that require an active connection are greyed out when offline.
+The Debug section is hidden by default and can be enabled in Settings.
 
 ## Multiple accounts
 
@@ -42,16 +50,41 @@ reconnect settings.
 
 ## Background & lock screen
 
-The app runs in the background even when the phone is locked. The WebSocket
-connection stays alive so you never miss an update. Alerts and notifications
-are delivered regardless of whether the screen is on or the app is in the
-foreground.
+The app runs in the background even when the phone is locked using a
+foreground service. A Wi-Fi lock keeps the network active and an optional
+CPU wake lock (off, smart, or always) prevents the system from sleeping
+during long AFK sessions. The smart mode automatically enables the CPU lock
+after the phone has been locked for a configurable delay and releases it on
+unlock.
+
+If the WebSocket disconnects, the app retries indefinitely with exponential
+backoff and reconnects immediately when the network comes back. An optional
+notification can alert you when a session loses connection.
+
+## Pets
+
+The Pets section shows your active pets with hunger bars, STR stats, and
+ability badges with dynamic colors from the game data. Tap a pet to feed it
+from your produce, swap it with another pet from inventory/hutch, or remove it.
+Empty slots can be filled by equipping a pet directly.
+
+Ability logs show a detailed description for each proc (e.g. "Snail found
+25552 coins", "Turtle reduced 1 plant growth by 4m 54s") alongside a colored
+ability badge matching the game UI.
+
+## Shops
+
+Three purchase modes are available (configurable in Settings):
+- **Hybrid** (default): tap to buy x1, long-press to buy all remaining stock.
+- **Single**: tap always buys x1.
+- **Bulk**: tap buys all remaining stock at once.
 
 ## Alerts
 
-MG AFK can notify you about shop restocks, weather changes, and low pet
-hunger. Toggle individual items in the Alerts section. Alerts work in the
-background and when the phone is locked.
+MG AFK can notify you about shop restocks, weather changes, low pet hunger,
+and feeding trough levels. Configure thresholds for pet hunger and feeding
+trough in the Alerts section. Alerts work in the background and when the
+phone is locked.
 
 ## Build
 

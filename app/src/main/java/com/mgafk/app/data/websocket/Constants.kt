@@ -7,7 +7,7 @@ object Constants {
     const val APP_PING_MS = 2000L
     const val GAME_NAME = "Quinoa"
     const val DEFAULT_UA = "Mozilla/5.0"
-    const val RETRY_MAX = 15
+    const val RETRY_MAX = Int.MAX_VALUE
     const val RETRY_DELAY_MS = 1500L
     const val RETRY_JITTER_MS = 1000L
     const val RETRY_MAX_DELAY_MS = 60000L

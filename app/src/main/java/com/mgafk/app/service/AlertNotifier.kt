@@ -20,6 +20,7 @@ import com.mgafk.app.MgAfkApp
 import com.mgafk.app.data.model.AlertConfig
 import com.mgafk.app.data.model.AlertMode
 import com.mgafk.app.data.model.AlertSection
+import com.mgafk.app.data.model.InventoryCropsItem
 import com.mgafk.app.data.model.PetSnapshot
 import com.mgafk.app.data.model.ShopSnapshot
 import com.mgafk.app.data.repository.MgApi
@@ -39,6 +40,7 @@ class AlertNotifier(private val context: Context) {
     private val firedShopKeys = mutableSetOf<String>()
     private val firedHungerPets = mutableSetOf<String>()
     private var firedWeather: String = ""
+    private var firedTroughLow: Boolean = false
 
     // ── Public check methods ──
 
@@ -46,13 +48,14 @@ class AlertNotifier(private val context: Context) {
         val hungerAlert = alerts.items["hunger<5"] ?: return
         if (!hungerAlert.enabled) return
 
+        val threshold = alerts.petHungerThreshold
         val currentLowPets = mutableSetOf<String>()
         val items = mutableListOf<DisplayItem>()
 
         for (pet in pets) {
             val maxHunger = Constants.PET_HUNGER_COSTS[pet.species.lowercase()] ?: continue
             val percent = (pet.hunger.toFloat() / maxHunger) * 100
-            if (percent < Constants.PET_HUNGER_THRESHOLD) {
+            if (percent < threshold) {
                 currentLowPets.add(pet.id)
                 if (pet.id !in firedHungerPets) {
                     firedHungerPets.add(pet.id)
@@ -114,8 +117,44 @@ class AlertNotifier(private val context: Context) {
         }
     }
 
+    fun checkFeedingTrough(trough: List<InventoryCropsItem>, alerts: AlertConfig) {
+        val troughAlert = alerts.items["trough_low"] ?: return
+        if (!troughAlert.enabled) return
+
+        val isLow = trough.size <= 1
+
+        if (isLow && !firedTroughLow) {
+            firedTroughLow = true
+            dispatchAlert(
+                title = "Feeding Trough",
+                items = listOf(DisplayItem(label = "Only ${trough.size} item(s) left in trough")),
+                mode = alerts.modeFor(AlertSection.FEEDING_TROUGH),
+            )
+        } else if (!isLow) {
+            firedTroughLow = false
+        }
+    }
+
     fun stopAlarm() {
         stopGlobalAlarm()
+    }
+
+    // ── Disconnect notification ──
+
+    private val DISCONNECT_NOTIFICATION_ID = 999
+
+    fun notifyDisconnect(sessionName: String, code: Int?, reason: String) {
+        val body = if (code != null) "Code $code — $reason" else reason
+        val builder = NotificationCompat.Builder(context, MgAfkApp.CHANNEL_ALERTS)
+            .setContentTitle("$sessionName disconnected")
+            .setContentText(body)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setAutoCancel(true)
+        manager.notify(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode(), builder.build())
+    }
+
+    fun cancelDisconnectNotification(sessionName: String) {
+        manager.cancel(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode())
     }
 
     fun cleanup() {

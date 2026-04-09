@@ -41,7 +41,7 @@ data class PlayerModel(
     val selectedItemIndex: Int? = null,
 
     // Slot data
-    val coins: Int = 0,
+    val coins: Double = 0.0,
     val schemaVersion: String? = null,
     val inventory: JsonArray = EMPTY_ARRAY,
     val storages: JsonArray = EMPTY_ARRAY,
@@ -162,7 +162,7 @@ data class PlayerModel(
 
                 // Slot data fields
                 schemaVersion = data?.get("schemaVersion")?.jsonPrimitive?.contentOrNull,
-                coins = data?.get("coinsCount")?.jsonPrimitive?.intOrNull ?: 0,
+                coins = data?.get("coinsCount")?.jsonPrimitive?.doubleOrNull ?: 0.0,
                 inventory = inv?.get("items") as? JsonArray ?: EMPTY_ARRAY,
                 storages = inv?.get("storages") as? JsonArray ?: EMPTY_ARRAY,
                 favoritedItemIds = (inv?.get("favoritedItemIds") as? JsonArray)
@@ -189,10 +189,17 @@ data class PetInfo(
     val hunger: Double,
     val index: Int,
     val mutations: List<String>,
+    val xp: Double = 0.0,
+    val targetScale: Double = 1.0,
+    val abilities: List<String> = emptyList(),
 ) {
     companion object {
         fun fromJson(obj: JsonObject, index: Int): PetInfo {
             val mutations = (obj["mutations"] as? JsonArray)
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?.filter { it.isNotBlank() }
+                ?: emptyList()
+            val abilities = (obj["abilities"] as? JsonArray)
                 ?.mapNotNull { it.jsonPrimitive.contentOrNull }
                 ?.filter { it.isNotBlank() }
                 ?: emptyList()
@@ -203,6 +210,9 @@ data class PetInfo(
                 hunger = obj["hunger"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
                 index = index,
                 mutations = mutations,
+                xp = obj["xp"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                targetScale = obj["targetScale"]?.jsonPrimitive?.doubleOrNull ?: 1.0,
+                abilities = abilities,
             )
         }
     }

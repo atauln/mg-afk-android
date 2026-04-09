@@ -32,7 +32,11 @@ data class Session(
     val seedSilo: List<InventorySeedItem> = emptyList(),
     val decorShed: List<InventoryDecorItem> = emptyList(),
     val petHutch: List<InventoryPetItem> = emptyList(),
-    val feedingTrough: List<InventoryEggItem> = emptyList(),
+    val feedingTrough: List<InventoryCropsItem> = emptyList(),
+    val chatMessages: List<ChatMessage> = emptyList(),
+    val playersList: List<PlayerSnapshot> = emptyList(),
+    val gameVersion: String = "",
+    val wsLogs: List<WsLog> = emptyList(),
 )
 
 @Serializable
@@ -53,6 +57,7 @@ data class ReconnectConfig(
 data class ReconnectDelays(
     val supersededMs: Long = 30000,
     val otherMs: Long = 1500,
+    val maxDelayMs: Long = 60000,
 )
 
 /** Serializable snapshot of a pet for Session persistence */
@@ -64,16 +69,21 @@ data class PetSnapshot(
     val hunger: Double = 0.0,
     val index: Int = 0,
     val mutations: List<String> = emptyList(),
+    val xp: Double = 0.0,
+    val targetScale: Double = 1.0,
+    val abilities: List<String> = emptyList(),
 )
 
 @Serializable
 data class AbilityLog(
+    val id: String = UUID.randomUUID().toString(),
     val timestamp: Long = 0,
     val action: String = "",
     val petName: String = "",
     val petSpecies: String = "",
     val petMutations: List<String> = emptyList(),
     val slotIndex: Int = 0,
+    val params: Map<String, String> = emptyMap(),
 )
 
 /** Inventory snapshot */
@@ -82,6 +92,7 @@ data class InventorySnapshot(
     val seeds: List<InventorySeedItem> = emptyList(),
     val eggs: List<InventoryEggItem> = emptyList(),
     val produce: List<InventoryProduceItem> = emptyList(),
+    val plants: List<InventoryPlantItem> = emptyList(),
     val pets: List<InventoryPetItem> = emptyList(),
     val tools: List<InventoryToolItem> = emptyList(),
     val decors: List<InventoryDecorItem> = emptyList(),
@@ -101,8 +112,25 @@ data class InventoryEggItem(
 
 @Serializable
 data class InventoryProduceItem(
+    val id: String = "",
     val species: String = "",
-    val targetScale: Double = 0.0,
+    val scale: Double = 0.0,
+    val mutations: List<String> = emptyList(),
+)
+
+@Serializable
+data class InventoryPlantItem(
+    val id: String = "",
+    val species: String = "",
+    val growSlots: Int = 0,
+    val totalPrice: Long = 0,
+)
+
+@Serializable
+data class InventoryCropsItem(
+    val id: String = "",
+    val species: String = "",
+    val scale: Double = 0.0,
     val mutations: List<String> = emptyList(),
 )
 
@@ -129,6 +157,29 @@ data class InventoryDecorItem(
     val quantity: Int = 0,
 )
 
+/** Player snapshot for room player list */
+@Serializable
+data class PlayerSnapshot(
+    val id: String = "",
+    val name: String = "",
+    val isConnected: Boolean = false,
+    val coins: Double = 0.0,
+    val color: String = "",
+    val avatarBottom: String = "",
+    val avatarMid: String = "",
+    val avatarTop: String = "",
+    val avatarExpression: String = "",
+)
+
+/** Chat message snapshot */
+@Serializable
+data class ChatMessage(
+    val timestamp: Long = 0,
+    val playerId: String = "",
+    val playerName: String = "",
+    val message: String = "",
+)
+
 /** Serializable snapshot of a garden egg for Session persistence */
 @Serializable
 data class GardenEggSnapshot(
@@ -153,5 +204,15 @@ data class ShopSnapshot(
     val type: String = "",
     val itemNames: List<String> = emptyList(),
     val itemStocks: Map<String, Int> = emptyMap(),
+    val initialStocks: Map<String, Int> = emptyMap(),
     val secondsUntilRestock: Int = 0,
+)
+
+/** WebSocket debug log entry */
+@Serializable
+data class WsLog(
+    val timestamp: Long = System.currentTimeMillis(),
+    val level: String = "info",
+    val event: String = "",
+    val detail: String = "",
 )
