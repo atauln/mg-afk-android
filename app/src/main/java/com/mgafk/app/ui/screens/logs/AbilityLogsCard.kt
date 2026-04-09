@@ -70,6 +70,7 @@ fun AbilityLogsCard(
         modifier = modifier,
         title = "Ability Logs",
         collapsible = true,
+        persistKey = "pets.abilityLogs",
         trailing = {
             if (logs.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

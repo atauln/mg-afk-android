@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -37,10 +38,24 @@ import com.mgafk.app.ui.theme.SurfaceCard
 import com.mgafk.app.ui.theme.TextMuted
 
 /**
+ * Holds persisted card collapse state and a callback to update it.
+ * Provided via [LocalCardCollapseState] from [MainScreen].
+ */
+data class CardCollapseState(
+    val collapsedCards: Map<String, Boolean> = emptyMap(),
+    val onExpandedChange: (key: String, expanded: Boolean) -> Unit = { _, _ -> },
+)
+
+val LocalCardCollapseState = compositionLocalOf { CardCollapseState() }
+
+/**
  * Styled card container with optional title, trailing content, and collapsible support.
  *
  * When collapsed, content is always measured at full height (so FlowRow etc. pre-compute
  * their layout), but clipped to zero height. This makes expand/collapse instant.
+ *
+ * When [persistKey] is set, the expanded/collapsed state is persisted across app restarts
+ * via [LocalCardCollapseState].
  */
 @Composable
 fun AppCard(
@@ -51,14 +66,22 @@ fun AppCard(
     initiallyExpanded: Boolean = true,
     expanded: Boolean? = null,
     onExpandedChange: ((Boolean) -> Unit)? = null,
+    persistKey: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val collapseState = if (persistKey != null) LocalCardCollapseState.current else null
+    val persistedExpanded = if (persistKey != null) {
+        collapseState?.collapsedCards?.get(persistKey)?.let { !it }
+    } else null
+
     var internalExpanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
-    val isExpanded = expanded ?: internalExpanded
+    val isExpanded = expanded ?: persistedExpanded ?: internalExpanded
     val toggle = {
         val newValue = !isExpanded
         if (expanded != null && onExpandedChange != null) {
             onExpandedChange(newValue)
+        } else if (persistKey != null && collapseState != null) {
+            collapseState.onExpandedChange(persistKey, newValue)
         } else {
             internalExpanded = newValue
         }

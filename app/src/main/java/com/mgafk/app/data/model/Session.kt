@@ -106,9 +106,9 @@ data class InventoryEggItem(
 
 @Serializable
 data class InventoryProduceItem(
-    val plantId: String = "",
+    val id: String = "",
     val species: String = "",
-    val targetScale: Double = 0.0,
+    val scale: Double = 0.0,
     val mutations: List<String> = emptyList(),
 )
 

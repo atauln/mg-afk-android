@@ -73,6 +73,7 @@ fun EggsCard(eggs: List<GardenEggSnapshot>, apiReady: Boolean = false) {
             )
         },
         collapsible = true,
+        persistKey = "garden.eggs",
     ) {
         if (eggs.isEmpty()) {
             Text("No eggs in the garden.", fontSize = 12.sp, color = TextMuted)

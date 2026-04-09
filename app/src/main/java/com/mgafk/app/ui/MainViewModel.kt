@@ -56,12 +56,14 @@ data class UiState(
     val sessions: List<Session> = listOf(Session()),
     val activeSessionId: String = "",
     val alerts: AlertConfig = AlertConfig(),
+    val collapsedCards: Map<String, Boolean> = emptyMap(),
     val connecting: Boolean = false,
     val apiReady: Boolean = false,
     val loadingStep: String = "",
     val updateAvailable: AppRelease? = null,
     val purchaseError: String = "",
     val showShopTip: Boolean = false,
+    val showTroughTip: Boolean = false,
 ) {
     val activeSession: Session
         get() = sessions.find { it.id == activeSessionId } ?: sessions.first()
@@ -82,12 +84,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val sessions = repo.loadSessions().ifEmpty { listOf(Session()) }
             val activeId = repo.loadActiveSessionId() ?: sessions.first().id
             val alerts = repo.loadAlerts()
+            val collapsedCards = repo.loadCollapsedCards()
             val shopTipDismissed = repo.isShopTipDismissed()
+            val troughTipDismissed = repo.isTroughTipDismissed()
             _state.value = UiState(
                 sessions = sessions,
                 activeSessionId = activeId,
                 alerts = alerts,
+                collapsedCards = collapsedCards,
                 showShopTip = !shopTipDismissed,
+                showTroughTip = !troughTipDismissed,
             )
             // Preload ALL API data + sprites at startup
             launch {
@@ -249,6 +255,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { repo.dismissShopTip() }
     }
 
+    fun dismissTroughTip() {
+        _state.update { it.copy(showTroughTip = false) }
+        viewModelScope.launch { repo.dismissTroughTip() }
+    }
+
     fun purchaseShopItem(sessionId: String, shopType: String, itemName: String) {
         val actions = clients[sessionId]?.actions ?: return
 
@@ -345,6 +356,130 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val trimmed = message.trim()
         if (trimmed.isBlank()) return
         clients[sessionId]?.actions?.chat(trimmed)
+    }
+
+    private val pendingTroughJobs = mutableMapOf<String, Job>()
+
+    fun putItemsInFeedingTrough(sessionId: String, produceItems: List<InventoryProduceItem>) {
+        val actions = clients[sessionId]?.actions ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+        val currentCount = session.feedingTrough.size
+        val toAdd = produceItems.filterIndexed { i, _ -> currentCount + i < 9 }
+        if (toAdd.isEmpty()) return
+
+        // Optimistic: add crops to trough + remove from inventory
+        val previousTrough = session.feedingTrough
+        val previousInventory = session.inventory
+        val addedIds = toAdd.map { it.id }.toSet()
+        updateSession(sessionId) { s ->
+            s.copy(
+                feedingTrough = s.feedingTrough + toAdd.map { p ->
+                    InventoryCropsItem(id = p.id, species = p.species, scale = p.scale, mutations = p.mutations)
+                },
+                inventory = s.inventory.copy(
+                    produce = s.inventory.produce.filter { it.id !in addedIds }
+                ),
+            )
+        }
+
+        // Send to server
+        toAdd.forEachIndexed { index, item ->
+            actions.putItemInStorage(
+                itemId = item.id,
+                storageId = "FeedingTrough",
+                toStorageIndex = currentCount + index,
+            )
+        }
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:trough:add:${toAdd.first().id}"
+        pendingTroughJobs[key]?.cancel()
+        pendingTroughJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s ->
+                s.copy(feedingTrough = previousTrough, inventory = previousInventory)
+            }
+            pendingTroughJobs.remove(key)
+        }
+    }
+
+    fun removeItemFromFeedingTrough(sessionId: String, itemId: String) {
+        val actions = clients[sessionId]?.actions ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+
+        // Optimistic: remove crop from trough + add back to inventory
+        val previousTrough = session.feedingTrough
+        val previousInventory = session.inventory
+        val removed = session.feedingTrough.find { it.id == itemId } ?: return
+        updateSession(sessionId) { s ->
+            s.copy(
+                feedingTrough = s.feedingTrough.filter { it.id != itemId },
+                inventory = s.inventory.copy(
+                    produce = s.inventory.produce + InventoryProduceItem(
+                        id = removed.id, species = removed.species,
+                        scale = removed.scale, mutations = removed.mutations,
+                    )
+                ),
+            )
+        }
+
+        // Send to server
+        actions.retrieveItemFromStorage(itemId = itemId, storageId = "FeedingTrough")
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:trough:remove:$itemId"
+        pendingTroughJobs[key]?.cancel()
+        pendingTroughJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s ->
+                s.copy(feedingTrough = previousTrough, inventory = previousInventory)
+            }
+            pendingTroughJobs.remove(key)
+        }
+    }
+
+    private val pendingFeedJobs = mutableMapOf<String, Job>()
+
+    fun feedPet(sessionId: String, petItemId: String, cropItemIds: List<String>) {
+        val actions = clients[sessionId]?.actions ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+
+        // Optimistic: remove crops from inventory
+        val previousInventory = session.inventory
+        val idsToRemove = cropItemIds.toSet()
+        updateSession(sessionId) { s ->
+            s.copy(
+                inventory = s.inventory.copy(
+                    produce = s.inventory.produce.filter { it.id !in idsToRemove }
+                ),
+            )
+        }
+
+        // Send each feed action to server
+        cropItemIds.forEach { cropId ->
+            actions.feedPet(petItemId = petItemId, cropItemId = cropId)
+        }
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:feed:$petItemId:${cropItemIds.first()}"
+        pendingFeedJobs[key]?.cancel()
+        pendingFeedJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s ->
+                s.copy(inventory = previousInventory)
+            }
+            pendingFeedJobs.remove(key)
+        }
+    }
+
+    // ---- Card collapse persistence ----
+
+    fun setCardExpanded(key: String, expanded: Boolean) {
+        val collapsed = !expanded
+        _state.update {
+            it.copy(collapsedCards = it.collapsedCards + (key to collapsed))
+        }
+        viewModelScope.launch { repo.saveCollapsedCards(_state.value.collapsedCards) }
     }
 
     // ---- Alerts ----
@@ -482,9 +617,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             eggId = obj["eggId"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                             quantity = obj["quantity"]?.jsonPrimitive?.intOrNull ?: 1,
                         ))
+                        "Produce" -> produce.add(InventoryProduceItem(
+                            id = obj["id"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                            species = obj["species"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                            scale = obj["scale"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                            mutations = (obj["mutations"] as? JsonArray)
+                                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                                ?.filter { it.isNotBlank() } ?: emptyList(),
+                        ))
                         "Plant" -> {
                             val slots = obj["slots"] as? JsonArray
-                            val plantId = obj["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
                             val plantSpecies = obj["species"]?.jsonPrimitive?.contentOrNull.orEmpty()
                             var plantPrice = 0L
                             slots?.forEach { slotEl ->
@@ -496,12 +638,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     ?.mapNotNull { it.jsonPrimitive.contentOrNull }
                                     ?.filter { it.isNotBlank() } ?: emptyList()
                                 plantPrice += PriceCalculator.calculateCropSellPrice(slotSpecies, scale, muts) ?: 0L
-                                produce.add(InventoryProduceItem(
-                                    plantId = plantId,
-                                    species = slotSpecies,
-                                    targetScale = scale,
-                                    mutations = muts,
-                                ))
                             }
                             plants.add(InventoryPlantItem(
                                 id = obj["id"]?.jsonPrimitive?.contentOrNull.orEmpty(),
@@ -576,6 +712,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+                // Server confirmed — cancel any pending rollbacks
+                pendingTroughJobs.values.forEach { it.cancel() }
+                pendingTroughJobs.clear()
+                pendingFeedJobs.values.forEach { it.cancel() }
+                pendingFeedJobs.clear()
+
                 updateSession(sessionId) {
                     it.copy(
                         inventory = InventorySnapshot(seeds, eggs, produce, plants, pets, tools, decors),

@@ -177,6 +177,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
             }
         },
         collapsible = true,
+        persistKey = "garden.plants",
     ) {
         if (plants.isEmpty()) {
             Text("No plants in the garden.", fontSize = 12.sp, color = TextMuted)

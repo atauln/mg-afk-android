@@ -188,6 +188,7 @@ private fun ShopCategoryCard(
         title = label,
         trailing = { RestockTimer(restockSec) },
         collapsible = true,
+        persistKey = "shops.${shop?.type ?: label}",
     ) {
         if (items.isEmpty()) {
             Text("Empty", fontSize = 11.sp, color = TextMuted)

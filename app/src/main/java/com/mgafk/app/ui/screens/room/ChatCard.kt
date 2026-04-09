@@ -73,6 +73,7 @@ fun ChatCard(
         modifier = modifier,
         title = "Chat",
         collapsible = true,
+        persistKey = "room.chat",
     ) {
         if (messages.isEmpty()) {
             Text("No messages yet.", fontSize = 12.sp, color = TextMuted)

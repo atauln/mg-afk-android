@@ -39,7 +39,7 @@ private val WEATHER_API_KEYS = mapOf(
 
 @Composable
 fun LiveStatusCard(session: Session, modifier: Modifier = Modifier) {
-    AppCard(modifier = modifier, title = "Live Status", collapsible = true) {
+    AppCard(modifier = modifier, title = "Live Status", collapsible = true, persistKey = "dashboard.liveStatus") {
         StatusRow("Players", "${session.players}")
         UptimeRow(session.connectedAt)
         StatusRow("Player", session.playerName.ifBlank { "-" })

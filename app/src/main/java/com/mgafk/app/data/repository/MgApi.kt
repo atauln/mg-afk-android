@@ -6,6 +6,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -49,6 +50,7 @@ object MgApi {
         val baseSellPrice: Double? = null,
         val hoursToMature: Double? = null,
         val color: String? = null,
+        val diet: List<String> = emptyList(),
     ) {
         val rarityIndex: Int get() = RARITY_ORDER.indexOf(rarity).let { if (it < 0) RARITY_ORDER.size else it }
     }
@@ -174,6 +176,9 @@ object MgApi {
                     baseSellPrice = cropObj?.get("baseSellPrice")?.jsonPrimitive?.doubleOrNull,
                 )
             } else {
+                val dietArray = (obj?.get("diet") as? JsonArray)
+                    ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                    ?: emptyList()
                 result[id] = GameEntry(
                     id = id,
                     name = obj?.get("name")?.jsonPrimitive?.contentOrNull ?: id,
@@ -182,6 +187,7 @@ object MgApi {
                     maxScale = obj?.get("maxScale")?.jsonPrimitive?.doubleOrNull,
                     hoursToMature = obj?.get("hoursToMature")?.jsonPrimitive?.doubleOrNull,
                     color = obj?.get("color")?.jsonPrimitive?.contentOrNull,
+                    diet = dietArray,
                 )
             }
         }

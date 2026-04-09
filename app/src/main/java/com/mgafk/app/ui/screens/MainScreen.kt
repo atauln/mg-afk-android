@@ -46,6 +46,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -71,6 +72,8 @@ import com.mgafk.app.data.model.AlertSection
 import com.mgafk.app.data.model.Session
 import com.mgafk.app.data.model.SessionStatus
 import com.mgafk.app.ui.MainViewModel
+import com.mgafk.app.ui.components.CardCollapseState
+import com.mgafk.app.ui.components.LocalCardCollapseState
 import com.mgafk.app.ui.screens.alerts.AlertsCards
 import com.mgafk.app.ui.screens.connection.ConnectionCard
 import com.mgafk.app.ui.screens.room.ChatCard
@@ -154,6 +157,14 @@ fun MainScreen(
         }
     }
 
+    val cardCollapseState = remember(state.collapsedCards) {
+        CardCollapseState(
+            collapsedCards = state.collapsedCards,
+            onExpandedChange = { key, expanded -> viewModel.setCardExpanded(key, expanded) },
+        )
+    }
+
+    CompositionLocalProvider(LocalCardCollapseState provides cardCollapseState) {
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -231,6 +242,7 @@ fun MainScreen(
             LoadingOverlay(step = loadingStep)
         }
     }
+    } // CompositionLocalProvider
 }
 
 // ── Loading overlay ──
@@ -507,7 +519,14 @@ private fun SectionContent(
             EggsCard(eggs = session.gardenEggs, apiReady = state.apiReady)
         }
         NavSection.PETS -> {
-            PetHungerCard(pets = session.pets)
+            PetHungerCard(
+                pets = session.pets,
+                produce = session.inventory.produce,
+                apiReady = state.apiReady,
+                onFeedPet = { petItemId, cropItemIds ->
+                    viewModel.feedPet(session.id, petItemId, cropItemIds)
+                },
+            )
             AbilityLogsCard(logs = session.logs, apiReady = state.apiReady, onClear = { viewModel.clearLogs(session.id) })
         }
         NavSection.SHOPS -> {
@@ -526,7 +545,19 @@ private fun SectionContent(
             SeedSiloCard(seeds = session.seedSilo, apiReady = state.apiReady)
             DecorShedCard(decors = session.decorShed, apiReady = state.apiReady)
             PetHutchCard(pets = session.petHutch, apiReady = state.apiReady)
-            FeedingTroughCard(crops = session.feedingTrough, apiReady = state.apiReady)
+            FeedingTroughCard(
+                crops = session.feedingTrough,
+                produce = session.inventory.produce,
+                apiReady = state.apiReady,
+                showTip = state.showTroughTip,
+                onDismissTip = { viewModel.dismissTroughTip() },
+                onAddItems = { items ->
+                    viewModel.putItemsInFeedingTrough(session.id, items)
+                },
+                onRemoveItem = { itemId ->
+                    viewModel.removeItemFromFeedingTrough(session.id, itemId)
+                },
+            )
         }
         NavSection.ALERTS -> {
             AlertsCards(

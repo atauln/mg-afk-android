@@ -24,6 +24,8 @@ class SessionRepository(private val context: Context) {
         private val KEY_ACTIVE = stringPreferencesKey("mgafk.activeSession")
         private val KEY_ALERTS = stringPreferencesKey("mgafk.alerts")
         private val KEY_SHOP_TIP = booleanPreferencesKey("mgafk.shopTipDismissed")
+        private val KEY_TROUGH_TIP = booleanPreferencesKey("mgafk.troughTipDismissed")
+        private val KEY_COLLAPSED_CARDS = stringPreferencesKey("mgafk.collapsedCards")
     }
 
     suspend fun loadSessions(): List<Session> {
@@ -76,6 +78,32 @@ class SessionRepository(private val context: Context) {
     suspend fun dismissShopTip() {
         context.dataStore.edit { prefs ->
             prefs[KEY_SHOP_TIP] = true
+        }
+    }
+
+    suspend fun isTroughTipDismissed(): Boolean {
+        return context.dataStore.data.map { it[KEY_TROUGH_TIP] ?: false }.first()
+    }
+
+    suspend fun dismissTroughTip() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_TROUGH_TIP] = true
+        }
+    }
+
+    suspend fun loadCollapsedCards(): Map<String, Boolean> {
+        val raw = context.dataStore.data.map { it[KEY_COLLAPSED_CARDS] }.first()
+        if (raw.isNullOrBlank()) return emptyMap()
+        return try {
+            json.decodeFromString<Map<String, Boolean>>(raw)
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    suspend fun saveCollapsedCards(collapsed: Map<String, Boolean>) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_COLLAPSED_CARDS] = json.encodeToString(collapsed)
         }
     }
 }

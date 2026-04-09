@@ -142,7 +142,7 @@ fun InventoryCard(inventory: InventorySnapshot, apiReady: Boolean = false) {
     val totalItems = inventory.seeds.size + inventory.eggs.size + inventory.produce.size +
         inventory.plants.size + inventory.pets.size + inventory.tools.size + inventory.decors.size
 
-    AppCard(title = "Inventory", collapsible = true, trailing = {
+    AppCard(title = "Inventory", collapsible = true, persistKey = "storage.inventory", trailing = {
         Text("$totalItems types", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Accent.copy(0.7f))
     }) {
         if (totalItems == 0) {
@@ -175,7 +175,7 @@ fun InventoryCard(inventory: InventorySnapshot, apiReady: Boolean = false) {
                 if (sortedProduce.isNotEmpty()) {
                     val totalProduceValue = remember(sortedProduce, apiReady) {
                         sortedProduce.sumOf { p ->
-                            PriceCalculator.calculateCropSellPrice(p.species, p.targetScale, p.mutations) ?: 0L
+                            PriceCalculator.calculateCropSellPrice(p.species, p.scale, p.mutations) ?: 0L
                         }
                     }
                     SubSection("Produce", sortedProduce.size, extraInfo = if (totalProduceValue > 0) PriceCalculator.formatPrice(totalProduceValue) else null) {
@@ -260,11 +260,11 @@ private fun ProduceTile(item: InventoryProduceItem, apiReady: Boolean) {
     val entry = remember(item.species, apiReady) { MgApi.findItem(item.species) }
     val color = rarityColor(entry?.rarity)
     val maxS = entry?.maxScale ?: 1.0
-    val pct = sizePercent(item.targetScale, maxS)
+    val pct = sizePercent(item.scale, maxS)
     val fraction = (pct / 100.0).toFloat().coerceIn(0f, 1f)
     val name = entry?.name?.removeSuffix(" Seed") ?: item.species
-    val price = remember(item.species, item.targetScale, item.mutations, apiReady) {
-        PriceCalculator.calculateCropSellPrice(item.species, item.targetScale, item.mutations)
+    val price = remember(item.species, item.scale, item.mutations, apiReady) {
+        PriceCalculator.calculateCropSellPrice(item.species, item.scale, item.mutations)
     }
 
     Column(

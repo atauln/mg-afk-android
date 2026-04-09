@@ -40,6 +40,7 @@ fun PlayersCard(
         modifier = modifier,
         title = "Players",
         collapsible = true,
+        persistKey = "room.players",
         trailing = {
             Text("${players.size}", fontSize = 11.sp, color = TextMuted)
         },
