@@ -196,6 +196,9 @@ data class GardenPlantSnapshot(
     val species: String = "",
     val targetScale: Double = 0.0,
     val mutations: List<String> = emptyList(),
+    // Optional growth timing for the active grow slot (ms since epoch)
+    val startTime: Long? = null,
+    val endTime: Long? = null,
 )
 
 /** Serializable snapshot of a shop for Session persistence */

@@ -232,6 +232,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 updateSession(sessionId) { it.copy(gameVersion = version) }
                 val client = clients.getOrPut(sessionId) { RoomClient() }
+                client.enableRuntimeDebug = true
 
                 // Cancel previous collector before starting a new one
                 collectorJobs[sessionId]?.cancel()
@@ -864,6 +865,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // Use max targetScale across all slots
                     var maxTargetScale = 0.0
                     val allMutations = mutableSetOf<String>()
+                    // Track optional active slot timings
+                    var activeStart: Long? = null
+                    var activeEnd: Long? = null
+
                     slots?.forEach { slotEl ->
                         val slot = slotEl as? JsonObject ?: return@forEach
                         val scale = slot["targetScale"]?.jsonPrimitive?.doubleOrNull ?: 0.0
@@ -872,12 +877,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val name = m.jsonPrimitive.contentOrNull
                             if (!name.isNullOrBlank()) allMutations.add(name)
                         }
+                        val s = slot["startTime"]?.jsonPrimitive?.longOrNull
+                        val e = slot["endTime"]?.jsonPrimitive?.longOrNull
+                        if (s != null && e != null) {
+                            val now = System.currentTimeMillis()
+                            if (e > now) {
+                                // Prefer a still-maturing slot. If we previously picked a finished
+                                // slot, prefer the still-maturing one; otherwise keep existing.
+                                val prevEnd = activeEnd
+                                if (prevEnd == null || prevEnd <= now) {
+                                    activeStart = s
+                                    activeEnd = e
+                                }
+                            } else {
+                                // Slot already matured — use it only if we don't have any active
+                                // slot yet, or if this one finished later than the current fallback.
+                                val prevEnd = activeEnd ?: Long.MIN_VALUE
+                                if (prevEnd == Long.MIN_VALUE || e > prevEnd) {
+                                    activeStart = s
+                                    activeEnd = e
+                                }
+                            }
+                        }
                     }
                     GardenPlantSnapshot(
                         tileId = tile.tileId,
                         species = species,
                         targetScale = maxTargetScale,
                         mutations = allMutations.toList(),
+                        startTime = activeStart,
+                        endTime = activeEnd,
                     )
                 }
                 updateSession(sessionId) { it.copy(garden = newGarden) }
