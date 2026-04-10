@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mgafk.app.data.model.AlertConfig
 import com.mgafk.app.data.model.AppSettings
+import com.mgafk.app.data.model.PetTeam
 import com.mgafk.app.data.model.Session
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -29,6 +30,9 @@ class SessionRepository(private val context: Context) {
         private val KEY_PET_TIP = booleanPreferencesKey("mgafk.petTipDismissed")
         private val KEY_COLLAPSED_CARDS = stringPreferencesKey("mgafk.collapsedCards")
         private val KEY_SETTINGS = stringPreferencesKey("mgafk.settings")
+        private val KEY_PET_TEAMS = stringPreferencesKey("mgafk.petTeams")
+        private val KEY_TEAM_TIP = booleanPreferencesKey("mgafk.teamTipDismissed")
+        private val KEY_GARDEN_TIP = booleanPreferencesKey("mgafk.gardenTipDismissed")
     }
 
     suspend fun loadSessions(): List<Session> {
@@ -141,6 +145,42 @@ class SessionRepository(private val context: Context) {
     suspend fun saveSettings(settings: AppSettings) {
         context.dataStore.edit { prefs ->
             prefs[KEY_SETTINGS] = json.encodeToString(settings)
+        }
+    }
+
+    suspend fun isTeamTipDismissed(): Boolean {
+        return context.dataStore.data.map { it[KEY_TEAM_TIP] ?: false }.first()
+    }
+
+    suspend fun dismissTeamTip() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_TEAM_TIP] = true
+        }
+    }
+
+    suspend fun isGardenTipDismissed(): Boolean {
+        return context.dataStore.data.map { it[KEY_GARDEN_TIP] ?: false }.first()
+    }
+
+    suspend fun dismissGardenTip() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_GARDEN_TIP] = true
+        }
+    }
+
+    suspend fun loadPetTeams(): List<PetTeam> {
+        val raw = context.dataStore.data.map { it[KEY_PET_TEAMS] }.first()
+        if (raw.isNullOrBlank()) return emptyList()
+        return try {
+            json.decodeFromString<List<PetTeam>>(raw)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun savePetTeams(teams: List<PetTeam>) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_PET_TEAMS] = json.encodeToString(teams)
         }
     }
 }

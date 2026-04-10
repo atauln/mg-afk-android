@@ -31,6 +31,7 @@ import com.mgafk.app.data.model.InventoryToolItem
 import com.mgafk.app.data.model.InventoryCropsItem
 import com.mgafk.app.data.model.InventoryDecorItem
 import com.mgafk.app.data.model.PetSnapshot
+import com.mgafk.app.data.model.PetTeam
 import com.mgafk.app.data.model.ReconnectConfig
 import com.mgafk.app.data.model.Session
 import com.mgafk.app.data.model.SessionStatus
@@ -78,6 +79,9 @@ data class UiState(
     val showShopTip: Boolean = false,
     val showTroughTip: Boolean = false,
     val showPetTip: Boolean = false,
+    val showTeamTip: Boolean = false,
+    val showGardenTip: Boolean = false,
+    val petTeams: List<PetTeam> = emptyList(),
     val settings: AppSettings = AppSettings(),
     val serviceLogs: List<AfkService.ServiceLog> = emptyList(),
 ) {
@@ -119,6 +123,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val troughTipDismissed = repo.isTroughTipDismissed()
             val petTipDismissed = repo.isPetTipDismissed()
             val settings = repo.loadSettings()
+            val petTeams = repo.loadPetTeams()
+            val teamTipDismissed = repo.isTeamTipDismissed()
+            val gardenTipDismissed = repo.isGardenTipDismissed()
             _state.value = UiState(
                 sessions = sessions,
                 activeSessionId = activeId,
@@ -127,6 +134,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 showShopTip = !shopTipDismissed,
                 showTroughTip = !troughTipDismissed,
                 showPetTip = !petTipDismissed,
+                showTeamTip = !teamTipDismissed,
+                showGardenTip = !gardenTipDismissed,
+                petTeams = petTeams,
                 settings = settings,
             )
             // Collect service logs (wake lock events etc.)
@@ -324,6 +334,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissPetTip() {
         _state.update { it.copy(showPetTip = false) }
         viewModelScope.launch { repo.dismissPetTip() }
+    }
+
+    fun dismissTeamTip() {
+        _state.update { it.copy(showTeamTip = false) }
+        viewModelScope.launch { repo.dismissTeamTip() }
+    }
+
+    fun dismissGardenTip() {
+        _state.update { it.copy(showGardenTip = false) }
+        viewModelScope.launch { repo.dismissGardenTip() }
     }
 
     fun purchaseShopItem(sessionId: String, shopType: String, itemName: String) {
@@ -695,6 +715,148 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         actions.putItemInStorage(itemId = petId, storageId = "PetHutch")
     }
 
+    // ---- Garden ----
+
+    fun harvestCrop(sessionId: String, slot: Int, slotIndex: Int) {
+        clients[sessionId]?.actions?.harvestCrop(slot = slot, slotsIndex = slotIndex)
+    }
+
+    // ---- Pet Teams ----
+
+    private fun persistPetTeams() {
+        viewModelScope.launch { repo.savePetTeams(_state.value.petTeams) }
+    }
+
+    /** Create a new pet team from the editor overlay selections. */
+    fun createPetTeam(team: PetTeam) {
+        if (_state.value.petTeams.size >= PetTeam.MAX_TEAMS) return
+        _state.update { it.copy(petTeams = it.petTeams + team) }
+        persistPetTeams()
+    }
+
+    /** Update an existing pet team (from the editor overlay). */
+    fun updatePetTeam(team: PetTeam) {
+        _state.update { s ->
+            s.copy(petTeams = s.petTeams.map { t ->
+                if (t.id == team.id) team.copy(updatedAt = System.currentTimeMillis()) else t
+            })
+        }
+        persistPetTeams()
+    }
+
+    /** Delete a team by id. */
+    fun deletePetTeam(teamId: String) {
+        _state.update { it.copy(petTeams = it.petTeams.filter { t -> t.id != teamId }) }
+        persistPetTeams()
+    }
+
+    /** Rename a team. */
+    fun renamePetTeam(teamId: String, newName: String) {
+        _state.update { s ->
+            s.copy(petTeams = s.petTeams.map { t ->
+                if (t.id == teamId) t.copy(name = newName, updatedAt = System.currentTimeMillis()) else t
+            })
+        }
+        persistPetTeams()
+    }
+
+    /** Reorder teams by moving [fromIndex] to [toIndex]. */
+    fun reorderPetTeams(fromIndex: Int, toIndex: Int) {
+        _state.update { s ->
+            val list = s.petTeams.toMutableList()
+            if (fromIndex in list.indices && toIndex in list.indices) {
+                val item = list.removeAt(fromIndex)
+                list.add(toIndex, item)
+            }
+            s.copy(petTeams = list)
+        }
+        persistPetTeams()
+    }
+
+    /**
+     * Activate a pet team: swap active pets to match the team composition.
+     *
+     * Strategy (sequential, same as Gemini userscript):
+     * 1. Remove active pets that are NOT in the target team.
+     * 2. Equip target pets that are NOT currently active.
+     *
+     * Pets already in the right slot are left untouched.
+     */
+    fun activateTeam(sessionId: String, team: PetTeam) {
+        val client = clients[sessionId] ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+        val actions = client.actions
+
+        val activePetIds = session.pets.map { it.id }.toSet()
+        val targetPetIds = team.petIds.filter { it.isNotBlank() }.toSet()
+
+        // Already the same team? Skip.
+        if (activePetIds == targetPetIds) {
+            Log.d(TAG, "[ActivateTeam] Team already active, skipping")
+            return
+        }
+
+        Log.d(TAG, "[ActivateTeam] active=$activePetIds, target=$targetPetIds")
+
+        // Step 1: Remove pets that are active but NOT in target
+        val toRemove = activePetIds - targetPetIds
+        for (petId in toRemove) {
+            Log.d(TAG, "[ActivateTeam] Removing $petId")
+            actions.pickupPet(petId = petId)
+            actions.putItemInStorage(itemId = petId, storageId = "PetHutch")
+        }
+
+        // Step 2: Equip pets that are in target but NOT active
+        val toEquip = targetPetIds - activePetIds
+        val hutchPetIds = session.petHutch.map { it.id }.toSet()
+        val inventoryPetIds = session.inventory.pets.map { it.id }.toSet()
+
+        // Determine placement position
+        val me = client.gameState.getPlayer(client.playerId)
+        val slotIndex = (me?.slotIndex ?: 0).coerceIn(0, 5)
+        val base = SLOT_BASE_TILE[slotIndex]
+        var nextLocal = 0
+
+        for (petId in toEquip) {
+            val isInHutch = petId in hutchPetIds
+            val isInInventory = petId in inventoryPetIds
+
+            if (!isInHutch && !isInInventory) {
+                Log.w(TAG, "[ActivateTeam] Pet $petId not found in hutch or inventory, skipping")
+                continue
+            }
+
+            if (isInHutch) {
+                Log.d(TAG, "[ActivateTeam] Retrieving $petId from hutch")
+                actions.retrieveItemFromStorage(itemId = petId, storageId = "PetHutch")
+            }
+
+            val x = base.first + nextLocal
+            val y = base.second
+            Log.d(TAG, "[ActivateTeam] Placing $petId at ($x, $y) local=$nextLocal")
+            actions.placePet(
+                itemId = petId,
+                x = x.toDouble(), y = y.toDouble(),
+                tileType = "Dirt",
+                localTileIndex = nextLocal,
+            )
+            nextLocal++
+        }
+    }
+
+    /**
+     * Detect which saved team matches the currently active pets (order-independent).
+     * Returns the team id or null if no match.
+     */
+    fun detectActiveTeamId(sessionId: String): String? {
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return null
+        val activePetIds = session.pets.map { it.id }.toSet()
+        if (activePetIds.isEmpty()) return null
+        return _state.value.petTeams.firstOrNull { team ->
+            team.petIds.filter { it.isNotBlank() }.toSet() == activePetIds
+        }?.id
+    }
+
     // ---- Card collapse persistence ----
 
     fun setCardExpanded(key: String, expanded: Boolean) {
@@ -857,28 +1019,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 alertNotifier.checkPetHunger(newPets, alerts)
             }
             is ClientEvent.GardenChanged -> {
-                val newGarden = event.plants.map { tile ->
+                val newGarden = mutableListOf<GardenPlantSnapshot>()
+                for (tile in event.plants) {
                     val data = tile.data
-                    val species = data["species"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    val slots = data["slots"] as? JsonArray
-                    // Use max targetScale across all slots
-                    var maxTargetScale = 0.0
-                    val allMutations = mutableSetOf<String>()
-                    slots?.forEach { slotEl ->
-                        val slot = slotEl as? JsonObject ?: return@forEach
-                        val scale = slot["targetScale"]?.jsonPrimitive?.doubleOrNull ?: 0.0
-                        if (scale > maxTargetScale) maxTargetScale = scale
+                    val slots = data["slots"] as? JsonArray ?: continue
+                    for ((index, slotEl) in slots.withIndex()) {
+                        val slot = slotEl as? JsonObject ?: continue
+                        val species = slot["species"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        val mutations = mutableListOf<String>()
                         (slot["mutations"] as? JsonArray)?.forEach { m ->
                             val name = m.jsonPrimitive.contentOrNull
-                            if (!name.isNullOrBlank()) allMutations.add(name)
+                            if (!name.isNullOrBlank()) mutations.add(name)
                         }
+                        newGarden += GardenPlantSnapshot(
+                            tileId = tile.tileId,
+                            slotIndex = index,
+                            species = species,
+                            targetScale = slot["targetScale"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                            mutations = mutations,
+                            endTime = slot["endTime"]?.jsonPrimitive?.longOrNull ?: 0L,
+                        )
                     }
-                    GardenPlantSnapshot(
-                        tileId = tile.tileId,
-                        species = species,
-                        targetScale = maxTargetScale,
-                        mutations = allMutations.toList(),
-                    )
                 }
                 updateSession(sessionId) { it.copy(garden = newGarden) }
             }

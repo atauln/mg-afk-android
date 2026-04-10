@@ -63,13 +63,11 @@ import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
 import com.mgafk.app.ui.theme.TextSecondary
+import com.mgafk.app.ui.components.mutationSpriteUrl
+import com.mgafk.app.ui.components.sortMutations
 
 private val TILE_MIN = 58.dp
 private val GAP = 6.dp
-
-private const val MUT_BASE = "https://mg-api.ariedam.fr/assets/sprites/ui/Mutation"
-private val MUT_MAP = mapOf("Ambershine" to "Amberlit")
-private fun mutUrl(m: String) = "$MUT_BASE${MUT_MAP[m] ?: m}.png"
 
 private val RarityCommon = Color(0xFFE7E7E7)
 private val RarityUncommon = Color(0xFF67BD4D)
@@ -320,7 +318,7 @@ private fun ActivePetRow(
                 )
                 if (pet.mutations.isNotEmpty()) {
                     Spacer(modifier = Modifier.width(4.dp))
-                    pet.mutations.forEach { SpriteImage(url = mutUrl(it), size = 14.dp, contentDescription = it) }
+                    sortMutations(pet.mutations).forEach { SpriteImage(url = mutationSpriteUrl(it), size = 14.dp, contentDescription = it) }
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 if (apiReady && maxStrength > 0) {
@@ -617,7 +615,7 @@ private fun PetCandidateTile(
                 modifier = Modifier.align(Alignment.TopStart).padding(5.dp),
                 horizontalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                pet.mutations.take(2).forEach { SpriteImage(url = mutUrl(it), size = 12.dp, contentDescription = it) }
+                sortMutations(pet.mutations).take(2).forEach { SpriteImage(url = mutationSpriteUrl(it), size = 12.dp, contentDescription = it) }
             }
         }
         // STR top-right
@@ -795,7 +793,7 @@ private fun FeedProduceTile(
         }
         if (item.mutations.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                item.mutations.take(3).forEach { SpriteImage(url = mutUrl(it), size = 12.dp, contentDescription = it) }
+                sortMutations(item.mutations).take(3).forEach { SpriteImage(url = mutationSpriteUrl(it), size = 12.dp, contentDescription = it) }
             }
         }
         if (isSelected) {

@@ -1,5 +1,8 @@
 package com.mgafk.app.ui.screens.garden
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,8 +49,12 @@ import com.mgafk.app.ui.theme.SurfaceBorder
 import com.mgafk.app.ui.theme.SurfaceCard
 import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
+import com.mgafk.app.ui.theme.StatusConnected
 import com.mgafk.app.ui.theme.TextPrimary
 import com.mgafk.app.ui.theme.TextSecondary
+import androidx.compose.ui.window.Dialog
+import com.mgafk.app.ui.components.mutationSpriteUrl
+import com.mgafk.app.ui.components.sortMutations
 
 // Game-authentic rarity colors
 private val RarityCommon = Color(0xFFE7E7E7)
@@ -68,17 +77,6 @@ private fun rarityColor(rarity: String?): Color = when (rarity?.lowercase()) {
 }
 
 private val RARITY_TIERS = listOf("Common", "Uncommon", "Rare", "Legendary", "Mythic", "Divine", "Celestial")
-
-private const val MUTATION_SPRITE_BASE = "https://mg-api.ariedam.fr/assets/sprites/ui/Mutation"
-
-private val MUTATION_SPRITE_NAME = mapOf(
-    "Ambershine" to "Amberlit",
-)
-
-private fun mutationSpriteUrl(mutation: String): String {
-    val spriteName = MUTATION_SPRITE_NAME[mutation] ?: mutation
-    return "$MUTATION_SPRITE_BASE$spriteName.png"
-}
 
 private val TILE_MIN_WIDTH = 76.dp
 private val TILE_SPACING = 6.dp
@@ -104,9 +102,16 @@ private data class ResolvedPlant(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
+fun GardenCard(
+    plants: List<GardenPlantSnapshot>,
+    apiReady: Boolean = false,
+    onHarvest: (slot: Int, slotIndex: Int) -> Unit = { _, _ -> },
+    showTip: Boolean = false,
+    onDismissTip: () -> Unit = {},
+) {
     var selectedRarity by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedMutation by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedPlant by remember { mutableStateOf<ResolvedPlant?>(null) }
 
     // Pre-resolve all API lookups once when plants/apiReady change
     val resolved = remember(plants, apiReady) {
@@ -124,7 +129,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
     }
 
     val allMutations = remember(plants) {
-        plants.flatMap { it.mutations }.distinct().sorted()
+        sortMutations(plants.flatMap { it.mutations }.distinct())
     }
 
     val allRarities = remember(resolved) {
@@ -179,6 +184,31 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
         collapsible = true,
         persistKey = "garden.plants",
     ) {
+        AnimatedVisibility(visible = showTip, enter = fadeIn(), exit = fadeOut()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Accent.copy(alpha = 0.1f))
+                    .border(1.dp, Accent.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                    .clickable { onDismissTip() }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Tap a crop to see its details and harvest it.",
+                        fontSize = 11.sp,
+                        color = Accent,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text("OK", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Accent,
+                        modifier = Modifier.clickable { onDismissTip() })
+                }
+            }
+        }
+
         if (plants.isEmpty()) {
             Text("No plants in the garden.", fontSize = 12.sp, color = TextMuted)
         } else {
@@ -252,7 +282,7 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
                                 horizontalArrangement = Arrangement.spacedBy(TILE_SPACING),
                             ) {
                                 rowPlants.forEach { rp ->
-                                    Box(modifier = Modifier.weight(1f)) {
+                                    Box(modifier = Modifier.weight(1f).clickable { selectedPlant = rp }) {
                                         GardenPlantTile(rp)
                                     }
                                 }
@@ -266,6 +296,18 @@ fun GardenCard(plants: List<GardenPlantSnapshot>, apiReady: Boolean = false) {
             }
 
         }
+    }
+
+    // Plant detail dialog
+    selectedPlant?.let { rp ->
+        PlantDetailDialog(
+            plant = rp,
+            onHarvest = {
+                onHarvest(rp.snapshot.tileId, rp.snapshot.slotIndex)
+                selectedPlant = null
+            },
+            onDismiss = { selectedPlant = null },
+        )
     }
 }
 
@@ -321,7 +363,7 @@ private fun GardenPlantTile(rp: ResolvedPlant) {
 // ── Size bar ──
 
 @Composable
-private fun SizeBar(percent: Double, color: Color) {
+private fun SizeBar(percent: Double, color: Color, showLabel: Boolean = true) {
     val fraction = (percent / 100.0).toFloat().coerceIn(0f, 1f)
 
     Row(
@@ -342,14 +384,16 @@ private fun SizeBar(percent: Double, color: Color) {
                     .background(color.copy(alpha = 0.8f)),
             )
         }
-        Spacer(modifier = Modifier.size(3.dp))
-        Text(
-            text = "${percent.toInt()}%",
-            fontSize = 7.sp,
-            color = TextSecondary,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 8.sp,
-        )
+        if (showLabel) {
+            Spacer(modifier = Modifier.size(3.dp))
+            Text(
+                text = "${percent.toInt()}%",
+                fontSize = 7.sp,
+                color = TextSecondary,
+                fontWeight = FontWeight.Medium,
+                lineHeight = 8.sp,
+            )
+        }
     }
 }
 
@@ -361,12 +405,139 @@ private fun MutationIcons(mutations: List<String>) {
         horizontalArrangement = Arrangement.spacedBy(1.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        mutations.take(4).forEach { mutation ->
+        sortMutations(mutations).take(4).forEach { mutation ->
             SpriteImage(
                 url = mutationSpriteUrl(mutation),
                 size = 12.dp,
                 contentDescription = mutation,
             )
+        }
+    }
+}
+
+// ── Plant detail dialog ──
+
+@Composable
+private fun PlantDetailDialog(
+    plant: ResolvedPlant,
+    onHarvest: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val color = rarityColor(plant.rarity)
+    val sizePercent = computeSizePercent(plant.snapshot.targetScale, plant.maxScale)
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(SurfaceCard)
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Sprite
+            SpriteImage(url = plant.cropSprite, size = 56.dp, contentDescription = plant.displayName)
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Name
+            Text(
+                plant.displayName,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+            )
+
+            // Rarity
+            if (plant.rarity != null) {
+                Text(
+                    plant.rarity,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = color,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Details
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // Size
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Size", fontSize = 12.sp, color = TextSecondary)
+                    Text("${sizePercent.toInt()}%", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                }
+                SizeBar(percent = sizePercent, color = color, showLabel = false)
+
+                // Sell price
+                if (plant.sellPrice != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Sell price", fontSize = 12.sp, color = TextSecondary)
+                        Text(
+                            PriceCalculator.formatPrice(plant.sellPrice),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFFD700),
+                        )
+                    }
+                }
+
+                // Tile
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Tile", fontSize = 12.sp, color = TextSecondary)
+                    Text("#${plant.snapshot.tileId}", fontSize = 12.sp, color = TextPrimary)
+                }
+
+                // Mutations
+                if (plant.snapshot.mutations.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Mutations", fontSize = 12.sp, color = TextSecondary)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            sortMutations(plant.snapshot.mutations).forEach { mutation ->
+                                SpriteImage(url = mutationSpriteUrl(mutation), size = 16.dp, contentDescription = mutation)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Harvest button (only enabled when endTime has passed)
+            val isMature = plant.snapshot.endTime > 0 && System.currentTimeMillis() >= plant.snapshot.endTime
+            Button(
+                onClick = onHarvest,
+                enabled = isMature,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = StatusConnected,
+                    disabledContainerColor = StatusConnected.copy(alpha = 0.2f),
+                    disabledContentColor = Color.White.copy(alpha = 0.4f),
+                ),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text(
+                    if (isMature) "Harvest" else "Growing…",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isMature) Color.White else Color.White.copy(alpha = 0.4f),
+                )
+            }
         }
     }
 }

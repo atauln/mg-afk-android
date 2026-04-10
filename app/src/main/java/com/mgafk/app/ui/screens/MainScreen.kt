@@ -91,6 +91,7 @@ import com.mgafk.app.ui.screens.storage.InventoryCard
 import com.mgafk.app.ui.screens.storage.PetHutchCard
 import com.mgafk.app.ui.screens.storage.SeedSiloCard
 import com.mgafk.app.ui.screens.pets.ActivePetsCard
+import com.mgafk.app.ui.screens.pets.PetTeamCard
 import com.mgafk.app.ui.screens.shops.ShopsCards
 import com.mgafk.app.ui.screens.status.LiveStatusCard
 import com.mgafk.app.ui.theme.Accent
@@ -539,7 +540,13 @@ private fun SectionContent(
             )
         }
         NavSection.GARDEN -> {
-            GardenCard(plants = session.garden, apiReady = state.apiReady)
+            GardenCard(
+                plants = session.garden,
+                apiReady = state.apiReady,
+                onHarvest = { slot, slotIndex -> viewModel.harvestCrop(session.id, slot, slotIndex) },
+                showTip = state.showGardenTip,
+                onDismissTip = { viewModel.dismissGardenTip() },
+            )
             EggsCard(eggs = session.gardenEggs, apiReady = state.apiReady)
         }
         NavSection.PETS -> {
@@ -563,6 +570,23 @@ private fun SectionContent(
                 onUnequipPet = { petId ->
                     viewModel.unequipPet(session.id, petId)
                 },
+            )
+            PetTeamCard(
+                teams = state.petTeams,
+                activePets = session.pets,
+                inventoryPets = session.inventory.pets,
+                hutchPets = session.petHutch,
+                activeTeamId = remember(session.pets, state.petTeams) {
+                    viewModel.detectActiveTeamId(session.id)
+                },
+                apiReady = state.apiReady,
+                onCreate = { team -> viewModel.createPetTeam(team) },
+                onUpdate = { team -> viewModel.updatePetTeam(team) },
+                onDelete = { teamId -> viewModel.deletePetTeam(teamId) },
+                onReorder = { from, to -> viewModel.reorderPetTeams(from, to) },
+                onActivate = { team -> viewModel.activateTeam(session.id, team) },
+                showTip = state.showTeamTip,
+                onDismissTip = { viewModel.dismissTeamTip() },
             )
             AbilityLogsCard(logs = session.logs, apiReady = state.apiReady, onClear = { viewModel.clearLogs(session.id) })
         }

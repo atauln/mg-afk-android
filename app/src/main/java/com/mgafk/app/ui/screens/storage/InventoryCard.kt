@@ -56,6 +56,8 @@ import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
 import com.mgafk.app.ui.theme.TextSecondary
+import com.mgafk.app.ui.components.mutationSpriteUrl
+import com.mgafk.app.ui.components.sortMutations
 
 // ── Rarity colors ──
 
@@ -80,10 +82,6 @@ private fun rarityColor(rarity: String?): Color = when (rarity?.lowercase()) {
 
 private val TILE_MIN_WIDTH = 76.dp
 private val TILE_SPACING = 6.dp
-
-private const val MUTATION_SPRITE_BASE = "https://mg-api.ariedam.fr/assets/sprites/ui/Mutation"
-private val MUTATION_SPRITE_NAME = mapOf("Ambershine" to "Amberlit")
-private fun mutationSpriteUrl(m: String) = "$MUTATION_SPRITE_BASE${MUTATION_SPRITE_NAME[m] ?: m}.png"
 
 // ── Strength (from game source) ──
 
@@ -291,7 +289,7 @@ private fun ProduceTile(item: InventoryProduceItem, apiReady: Boolean) {
         }
         if (item.mutations.isNotEmpty()) {
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-                item.mutations.take(4).forEach { SpriteImage(url = mutationSpriteUrl(it), size = 16.dp, contentDescription = it) }
+                sortMutations(item.mutations).take(4).forEach { SpriteImage(url = mutationSpriteUrl(it), size = 16.dp, contentDescription = it) }
             }
         }
     }
@@ -360,7 +358,7 @@ private fun PetTile(pet: InventoryPetItem, apiReady: Boolean) {
                 modifier = Modifier.align(Alignment.TopStart).padding(5.dp),
                 horizontalArrangement = Arrangement.spacedBy(1.dp),
             ) {
-                pet.mutations.take(2).forEach {
+                sortMutations(pet.mutations).take(2).forEach {
                     SpriteImage(url = mutationSpriteUrl(it), size = 12.dp, contentDescription = it)
                 }
             }

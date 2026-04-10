@@ -193,9 +193,11 @@ data class GardenEggSnapshot(
 @Serializable
 data class GardenPlantSnapshot(
     val tileId: Int = 0,
+    val slotIndex: Int = 0,
     val species: String = "",
     val targetScale: Double = 0.0,
     val mutations: List<String> = emptyList(),
+    val endTime: Long = 0,
 )
 
 /** Serializable snapshot of a shop for Session persistence */
