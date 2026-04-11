@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mgafk.app.data.repository.CasinoApi
 import com.mgafk.app.data.repository.CasinoApiException
+import com.mgafk.app.data.repository.DepositConfigResponse
 import com.mgafk.app.data.repository.Transaction
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -79,15 +80,19 @@ data class DepositUiState(
     val depositId: Long? = null,
     val command: String = "",
     val amount: Long = 0,
+    val receivedAmount: Long = 0,
     val status: String = "",
     val expiresAt: String = "",
     val loading: Boolean = false,
     val error: String? = null,
+    val refunded: Long = 0,
 )
 
 data class CasinoUiState(
     val casinoBalance: Long? = null,
     val casinoBalanceLoading: Boolean = false,
+    val depositConfig: DepositConfigResponse? = null,
+    val depositConfigLoading: Boolean = false,
     val deposit: DepositUiState = DepositUiState(),
     val withdraw: WithdrawUiState = WithdrawUiState(),
     val transactions: List<Transaction> = emptyList(),
@@ -146,6 +151,20 @@ class CasinoViewModel : ViewModel() {
 
     // ---- Deposit ----
 
+    fun fetchDepositConfig() {
+        _state.update { it.copy(depositConfigLoading = true) }
+        viewModelScope.launch {
+            CasinoApi.getDepositConfig()
+                .onSuccess { config ->
+                    _state.update { it.copy(depositConfig = config, depositConfigLoading = false) }
+                }
+                .onFailure {
+                    AppLog.e(TAG, "[DepositConfig] Failed: ${it.message}")
+                    _state.update { it.copy(depositConfigLoading = false) }
+                }
+        }
+    }
+
     private var depositPollJob: Job? = null
 
     fun requestDeposit(amount: Long) {
@@ -190,7 +209,7 @@ class CasinoViewModel : ViewModel() {
                             _state.update { it.copy(deposit = DepositUiState()) }
                             return@launch
                         }
-                        _state.update { it.copy(deposit = it.deposit.copy(status = info.status)) }
+                        _state.update { it.copy(deposit = it.deposit.copy(status = info.status, receivedAmount = info.receivedAmount)) }
                         when (info.status) {
                             "confirmed" -> {
                                 fetchCasinoBalance()
@@ -208,8 +227,13 @@ class CasinoViewModel : ViewModel() {
     fun cancelDeposit() {
         viewModelScope.launch {
             CasinoApi.cancelDeposit(apiKey)
-                .onSuccess {
-                    _state.update { it.copy(deposit = DepositUiState()) }
+                .onSuccess { resp ->
+                    _state.update {
+                        it.copy(deposit = it.deposit.copy(
+                            status = "cancelled",
+                            refunded = resp.refunded,
+                        ))
+                    }
                 }
                 .onFailure { e ->
                     _state.update { it.copy(deposit = it.deposit.copy(error = e.message)) }

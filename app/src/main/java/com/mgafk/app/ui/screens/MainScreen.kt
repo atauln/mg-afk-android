@@ -780,7 +780,10 @@ private fun SectionContent(
                     onRefreshGameBalance = { viewModel.fetchCurrencyBalance(session.id) },
                     onRefreshCasinoBalance = { casinoViewModel.fetchCasinoBalance() },
                     onConnectCasino = {},
-                    onDeposit = { walletMode = "deposit" },
+                    onDeposit = {
+                        casinoViewModel.fetchDepositConfig()
+                        walletMode = "deposit"
+                    },
                     onWithdraw = { walletMode = "withdraw" },
                 )
 
@@ -788,6 +791,8 @@ private fun SectionContent(
                 if (walletMode != null || casinoState.deposit.active || casinoState.withdraw.status.isNotEmpty()) {
                     WalletCard(
                         deposit = casinoState.deposit,
+                        depositConfig = casinoState.depositConfig,
+                        depositConfigLoading = casinoState.depositConfigLoading,
                         withdraw = casinoState.withdraw,
                         onRequestDeposit = { amount -> casinoViewModel.requestDeposit(amount) },
                         onCancelDeposit = { casinoViewModel.cancelDeposit() },

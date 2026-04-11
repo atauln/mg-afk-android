@@ -32,6 +32,7 @@ data class DepositStatusResponse(val deposit: DepositInfo?)
 data class DepositInfo(
     val id: Long,
     val amount: Long,
+    val receivedAmount: Long = 0,
     val status: String, // pending | confirmed | expired | cancelled
     val createdAt: String,
     val expiresAt: String,
@@ -39,7 +40,32 @@ data class DepositInfo(
 )
 
 @Serializable
-data class DepositCancelResponse(val cancelled: Boolean, val depositId: Long)
+data class DepositCancelResponse(
+    val cancelled: Boolean,
+    val depositId: Long,
+    val refunded: Long = 0,
+)
+
+@Serializable
+data class DepositConfigResponse(
+    val account: DepositAccount,
+    val limits: DepositLimits,
+)
+
+@Serializable
+data class DepositAccount(
+    val id: String,
+    val username: String,
+    val displayName: String,
+    val avatar: String,
+)
+
+@Serializable
+data class DepositLimits(
+    val maxDeposit: Long,
+    val dailyDepositLimit: Long,
+    val depositExpiryMinutes: Int,
+)
 
 @Serializable
 data class WithdrawResponse(
@@ -246,6 +272,16 @@ object CasinoApi {
         val request = get("/deposits/balance", apiKey)
         val body = execute(request)
         json.decodeFromString<CasinoBalanceResponse>(body).balance
+    }
+
+    /** Fetch deposit config (public, no auth needed) */
+    suspend fun getDepositConfig(): Result<DepositConfigResponse> = try {
+        val request = Request.Builder().url("$BASE_URL/deposits/config").build()
+        val body = execute(request)
+        Result.success(json.decodeFromString<DepositConfigResponse>(body))
+    } catch (e: Exception) {
+        AppLog.e(TAG, "[getDepositConfig] Error: ${e.message}", e)
+        Result.failure(e)
     }
 
     /** Create a deposit request */

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -73,6 +74,8 @@ private enum class WalletMode { IDLE, DEPOSIT, WITHDRAW }
 @Composable
 fun WalletCard(
     deposit: DepositUiState,
+    depositConfig: com.mgafk.app.data.repository.DepositConfigResponse?,
+    depositConfigLoading: Boolean,
     withdraw: WithdrawUiState,
     onRequestDeposit: (Long) -> Unit,
     onCancelDeposit: () -> Unit,
@@ -91,15 +94,15 @@ fun WalletCard(
     ) }
     var amount by remember { mutableStateOf("") }
 
-    // Show deposit popup when pending/confirmed/expired
-    val showDepositPopup = deposit.active || deposit.status in listOf("confirmed", "expired")
+    // Show deposit popup when pending/confirmed/expired/cancelled
+    val showDepositPopup = deposit.active || deposit.status in listOf("confirmed", "expired", "cancelled")
     if (showDepositPopup) {
         DepositPopup(
             deposit = deposit,
+            depositConfig = depositConfig,
             onCancel = {
                 if (deposit.active && deposit.status == "pending") onCancelDeposit()
-                onResetDeposit()
-                mode = WalletMode.IDLE
+                else { onResetDeposit(); mode = WalletMode.IDLE }
             },
             onDone = {
                 onResetDeposit()
@@ -118,8 +121,9 @@ fun WalletCard(
             DepositAmountInput(
                 amount = amount,
                 onAmountChange = { amount = it },
-                loading = deposit.loading,
+                loading = deposit.loading || depositConfigLoading,
                 error = deposit.error,
+                maxDeposit = depositConfig?.limits?.maxDeposit ?: 100_000,
                 onConfirm = { amt -> onRequestDeposit(amt) },
                 onCancel = { onResetDeposit(); mode = WalletMode.IDLE },
             )
@@ -150,11 +154,12 @@ private fun DepositAmountInput(
     onAmountChange: (String) -> Unit,
     loading: Boolean,
     error: String?,
+    maxDeposit: Long = 100_000,
     onConfirm: (Long) -> Unit,
     onCancel: () -> Unit,
 ) {
     val parsedAmount = amount.toLongOrNull()
-    val isValid = parsedAmount != null && parsedAmount > 0 && parsedAmount <= 100_000
+    val isValid = parsedAmount != null && parsedAmount > 0 && parsedAmount <= maxDeposit
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -185,7 +190,7 @@ private fun DepositAmountInput(
                 value = amount,
                 onValueChange = { new -> onAmountChange(new.filter { it.isDigit() }) },
                 label = { Text("Amount") },
-                placeholder = { Text("Max 100,000") },
+                placeholder = { Text("Max ${numberFormat.format(maxDeposit)}") },
                 leadingIcon = {
                     AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
                 },
@@ -221,6 +226,7 @@ private fun DepositAmountInput(
 @Composable
 private fun DepositPopup(
     deposit: DepositUiState,
+    depositConfig: com.mgafk.app.data.repository.DepositConfigResponse?,
     onCancel: () -> Unit,
     onDone: () -> Unit,
 ) {
@@ -242,19 +248,49 @@ private fun DepositPopup(
                             icon = Icons.Outlined.CheckCircle,
                             color = StatusConnected,
                             title = "Deposit confirmed!",
-                            subtitle = "${deposit.amount} breads added to your casino balance.",
+                            subtitle = "${numberFormat.format(deposit.amount)} breads added to your casino balance.",
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         FilledButton(label = "Done", color = StatusConnected, onClick = onDone)
                     }
 
+                    "cancelled" -> {
+                        if (deposit.refunded > 0) {
+                            StatusBanner(
+                                icon = Icons.Outlined.CheckCircle,
+                                color = StatusConnecting,
+                                title = "Deposit cancelled",
+                                subtitle = "${numberFormat.format(deposit.refunded)} breads refunded to your account.",
+                            )
+                        } else {
+                            StatusBanner(
+                                icon = Icons.Outlined.Close,
+                                color = TextMuted,
+                                title = "Deposit cancelled",
+                                subtitle = "No breads were sent.",
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        FilledButton(label = "Close", color = Accent, onClick = onDone)
+                    }
+
                     "expired" -> {
-                        StatusBanner(
-                            icon = Icons.Outlined.ErrorOutline,
-                            color = StatusError,
-                            title = "Deposit expired",
-                            subtitle = "The 5 minute window has passed. Try again.",
-                        )
+                        val expiryMin = depositConfig?.limits?.depositExpiryMinutes ?: 5
+                        if (deposit.receivedAmount > 0) {
+                            StatusBanner(
+                                icon = Icons.Outlined.ErrorOutline,
+                                color = StatusError,
+                                title = "Deposit expired",
+                                subtitle = "The $expiryMin minute window has passed. ${numberFormat.format(deposit.receivedAmount)} breads refunded to your account.",
+                            )
+                        } else {
+                            StatusBanner(
+                                icon = Icons.Outlined.ErrorOutline,
+                                color = StatusError,
+                                title = "Deposit expired",
+                                subtitle = "The $expiryMin minute window has passed. Try again.",
+                            )
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         FilledButton(label = "Close", color = Accent, onClick = onDone)
                     }
@@ -268,7 +304,7 @@ private fun DepositPopup(
                         )
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Command info
+                        // Command info with avatar
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -279,17 +315,81 @@ private fun DepositPopup(
                         ) {
                             Text("/doughnate", fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = Accent)
                             Spacer(modifier = Modifier.height(8.dp))
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text("target", fontSize = 12.sp, color = TextMuted)
-                                Text("BreadMan", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, fontFamily = FontFamily.Monospace)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val avatarUrl = depositConfig?.account?.avatar
+                                    if (avatarUrl != null) {
+                                        AsyncImage(
+                                            model = avatarUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .clip(CircleShape),
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Text(depositConfig?.account?.displayName ?: "...", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, fontFamily = FontFamily.Monospace)
+                                }
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("amount", fontSize = 12.sp, color = TextMuted)
-                                Text("${deposit.amount}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = StatusConnected, fontFamily = FontFamily.Monospace)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    val remaining = deposit.amount - deposit.receivedAmount
+                                    Text(numberFormat.format(remaining), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = StatusConnected, fontFamily = FontFamily.Monospace)
+                                }
                             }
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text("Username: karlanguyen_24381", fontSize = 10.sp, color = TextMuted.copy(alpha = 0.7f), fontFamily = FontFamily.Monospace)
+                            Text("Username: ${depositConfig?.account?.username ?: "..."}", fontSize = 10.sp, color = TextMuted.copy(alpha = 0.7f), fontFamily = FontFamily.Monospace)
+                        }
+
+                        // ── Progress bar ──
+                        if (deposit.receivedAmount > 0) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(SurfaceBorder.copy(alpha = 0.3f))
+                                    .border(1.dp, SurfaceBorder, RoundedCornerShape(10.dp))
+                                    .padding(12.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text("Received", fontSize = 11.sp, color = TextMuted)
+                                    Text(
+                                        "${numberFormat.format(deposit.receivedAmount)} / ${numberFormat.format(deposit.amount)}",
+                                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                        fontFamily = FontFamily.Monospace, color = Accent,
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val progress = (deposit.receivedAmount.toFloat() / deposit.amount.toFloat()).coerceIn(0f, 1f)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(SurfaceBorder),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(progress)
+                                            .height(6.dp)
+                                            .clip(RoundedCornerShape(3.dp))
+                                            .background(Accent),
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))
