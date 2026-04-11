@@ -247,6 +247,10 @@ class CasinoViewModel : ViewModel() {
                         fetchTransactions()
                     }
                 }
+                .onFailure { e ->
+                    AppLog.e(TAG, "[Deposit] Refresh failed: ${e.message}")
+                    _state.update { it.copy(deposit = it.deposit.copy(error = "Refresh failed: ${e.message}")) }
+                }
         }
     }
 
@@ -407,12 +411,14 @@ class CasinoViewModel : ViewModel() {
     private fun startCrashPolling() {
         crashPollJob?.cancel()
         crashPollJob = viewModelScope.launch {
+            var consecutiveErrors = 0
             while (true) {
-                delay(500)
+                delay(if (consecutiveErrors > 2) 2_000 else 500)
                 val current = _state.value.crash
                 if (!current.active || current.crashed || current.cashedOut) break
                 CasinoApi.getCrashStatus(apiKey)
                     .onSuccess { resp ->
+                        consecutiveErrors = 0
                         if (resp.status == "crashed") {
                             _state.update {
                                 it.copy(crash = it.crash.copy(
@@ -427,7 +433,6 @@ class CasinoViewModel : ViewModel() {
                         }
                     }
                     .onFailure { e ->
-                        // Only treat as crashed if it's a 404 (no active game)
                         if (e is CasinoApiException && e.code == 404) {
                             _state.update {
                                 it.copy(crash = it.crash.copy(
@@ -436,8 +441,10 @@ class CasinoViewModel : ViewModel() {
                                     payout = 0,
                                 ))
                             }
+                        } else {
+                            consecutiveErrors++
+                            AppLog.d(TAG, "[Crash] Poll failed ($consecutiveErrors): ${e.message}")
                         }
-                        // Otherwise keep polling (transient network error)
                     }
             }
         }
