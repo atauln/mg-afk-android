@@ -48,7 +48,7 @@ private val GAMES = listOf(
     GameDef("mines", "Mines", "\uD83D\uDCA3", "Avoid the mines", available = true, imageUrl = "https://mg-api.ariedam.fr/assets/sprites/ui/Locked.png"),
     GameDef("slots", "Slots", "\uD83C\uDFB0", "Spin to win", available = true),
     GameDef("dice", "Dice", "\uD83C\uDFB2", "Roll over or under", available = true),
-    GameDef("crash", "Crash", "\uD83D\uDCC8", "Cashout before crash", available = true),
+    GameDef("crash", "Crash", "\uD83D\uDE80", "Cashout before crash", available = true),
     GameDef("blackjack", "Blackjack", "\uD83C\uDCA1", "Beat the dealer", available = true),
 )
 

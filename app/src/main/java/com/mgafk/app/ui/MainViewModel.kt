@@ -40,6 +40,7 @@ import com.mgafk.app.data.repository.MgApi
 import com.mgafk.app.data.repository.SessionRepository
 import com.mgafk.app.data.repository.AppRelease
 import com.mgafk.app.data.repository.CasinoApi
+import com.mgafk.app.data.repository.CasinoApiException
 import com.mgafk.app.data.repository.VersionFetcher
 import com.mgafk.app.data.websocket.ClientEvent
 import com.mgafk.app.data.websocket.RoomClient
@@ -102,6 +103,18 @@ data class MinesUiState(
     val payout: Long = 0,
     val loading: Boolean = false,
     val error: String? = null,
+)
+
+/**
+ * Shown when a game start returns 409 (active game already exists).
+ * [game] is "crash" | "blackjack" | "mines".
+ * [pendingAmount] + [pendingExtra] hold the original start params so we can retry.
+ */
+data class GameConflict(
+    val game: String = "",
+    val pendingAmount: Long = 0,
+    val pendingExtra: Int = 0, // mineCount for mines, unused for others
+    val loading: Boolean = false,
 )
 
 data class WithdrawUiState(
@@ -176,6 +189,8 @@ data class UiState(
     val blackjack: BlackjackUiState = BlackjackUiState(),
     // Mines
     val mines: MinesUiState = MinesUiState(),
+    // Active game conflict (409)
+    val gameConflict: GameConflict? = null,
 ) {
     val activeSession: Session
         get() = sessions.find { it.id == activeSessionId } ?: sessions.first()
@@ -714,7 +729,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     startCrashPolling()
                 }
                 .onFailure { e ->
-                    _state.update { it.copy(crash = CrashUiState(error = e.message)) }
+                    if (e is CasinoApiException && e.code == 409) {
+                        _state.update {
+                            it.copy(
+                                crash = CrashUiState(),
+                                gameConflict = GameConflict(game = "crash", pendingAmount = amount),
+                            )
+                        }
+                    } else {
+                        _state.update { it.copy(crash = CrashUiState(error = e.message)) }
+                    }
                 }
         }
     }
@@ -803,6 +827,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(crash = CrashUiState()) }
     }
 
+    // ---- Game conflict (409) ----
+
+    fun dismissConflict() {
+        _state.update { it.copy(gameConflict = null) }
+    }
+
+    fun forfeitAndRetry() {
+        val conflict = _state.value.gameConflict ?: return
+        _state.update { it.copy(gameConflict = conflict.copy(loading = true)) }
+        viewModelScope.launch {
+            val forfeitResult = when (conflict.game) {
+                "crash" -> CasinoApi.forfeitCrash(casinoApiKey())
+                "blackjack" -> CasinoApi.forfeitBlackjack(casinoApiKey())
+                "mines" -> CasinoApi.forfeitMines(casinoApiKey())
+                else -> Result.failure(Exception("Unknown game"))
+            }
+            forfeitResult
+                .onSuccess {
+                    _state.update { it.copy(gameConflict = null) }
+                    fetchCasinoBalance()
+                    // Retry the original start
+                    when (conflict.game) {
+                        "crash" -> startCrash(conflict.pendingAmount)
+                        "blackjack" -> startBlackjack(conflict.pendingAmount)
+                        "mines" -> startMines(conflict.pendingAmount, conflict.pendingExtra)
+                    }
+                }
+                .onFailure { e ->
+                    _state.update {
+                        it.copy(gameConflict = null)
+                    }
+                    // Show error on the relevant game
+                    when (conflict.game) {
+                        "crash" -> _state.update { it.copy(crash = CrashUiState(error = "Forfeit failed: ${e.message}")) }
+                        "blackjack" -> _state.update { it.copy(blackjack = BlackjackUiState(error = "Forfeit failed: ${e.message}")) }
+                        "mines" -> _state.update { it.copy(mines = MinesUiState(error = "Forfeit failed: ${e.message}")) }
+                    }
+                }
+        }
+    }
+
     // ---- Blackjack ----
 
     fun startBlackjack(amount: Long) {
@@ -822,7 +887,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (resp.status == "done") fetchTransactions()
                 }
                 .onFailure { e ->
-                    _state.update { it.copy(blackjack = BlackjackUiState(error = e.message)) }
+                    if (e is CasinoApiException && e.code == 409) {
+                        _state.update {
+                            it.copy(
+                                blackjack = BlackjackUiState(),
+                                gameConflict = GameConflict(game = "blackjack", pendingAmount = amount),
+                            )
+                        }
+                    } else {
+                        _state.update { it.copy(blackjack = BlackjackUiState(error = e.message)) }
+                    }
                 }
         }
     }
@@ -977,7 +1051,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 .onFailure { e ->
-                    _state.update { it.copy(mines = MinesUiState(error = e.message)) }
+                    if (e is CasinoApiException && e.code == 409) {
+                        _state.update {
+                            it.copy(
+                                mines = MinesUiState(),
+                                gameConflict = GameConflict(game = "mines", pendingAmount = amount, pendingExtra = mineCount),
+                            )
+                        }
+                    } else {
+                        _state.update { it.copy(mines = MinesUiState(error = e.message)) }
+                    }
                 }
         }
     }
@@ -1661,12 +1744,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             "https://i.imgur.com/HlvVrpI.png",  // bread sprite
             "https://i.imgur.com/yPcQYDB.png",   // coin heads
             "https://i.imgur.com/J2gqn25.png",   // coin tails
-            "https://mg-api.ariedam.fr/assets/sprites/plants/Carrot.png",     // slots cherry
-            "https://mg-api.ariedam.fr/assets/sprites/plants/Lemon.png",      // slots lemon
-            "https://mg-api.ariedam.fr/assets/sprites/plants/Lychee.png",     // slots orange
-            "https://mg-api.ariedam.fr/assets/sprites/plants/Grape.png",      // slots grape
-            "https://mg-api.ariedam.fr/assets/sprites/plants/Starweaver.png", // slots diamond / mines gem
-            "https://mg-api.ariedam.fr/assets/sprites/items/Shovel.png",      // slots 7
+            "https://mg-api.ariedam.fr/assets/sprites/plants/Carrot.png",         // slots - common
+            "https://mg-api.ariedam.fr/assets/sprites/plants/Banana.png",        // slots - common
+            "https://mg-api.ariedam.fr/assets/sprites/plants/Pepper.png",        // slots - medium
+            "https://mg-api.ariedam.fr/assets/sprites/plants/Sunflower.png",     // slots - rare
+            "https://mg-api.ariedam.fr/assets/sprites/plants/Starweaver.png",     // slots - epic / mines gem
             "https://mg-api.ariedam.fr/assets/sprites/ui/Locked.png",         // mines bomb
         )
         casinoUrls.forEach { url ->

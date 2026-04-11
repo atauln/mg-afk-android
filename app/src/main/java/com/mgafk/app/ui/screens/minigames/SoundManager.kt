@@ -28,6 +28,7 @@ class SoundManager(context: Context) {
         Sfx.CARD_FLIP to pool.load(context, R.raw.sfx_card_flip, 1),
         Sfx.BUTTON to pool.load(context, R.raw.sfx_button, 1),
         Sfx.CRASH_RISING to pool.load(context, R.raw.sfx_crash_rising, 1),
+        Sfx.ALARM to pool.load(context, R.raw.sfx_alarm, 1),
         Sfx.SLOTS_LEVER to pool.load(context, R.raw.sfx_slots_lever, 1),
         Sfx.SLOTS_SPINNING to pool.load(context, R.raw.sfx_slots_spinning, 1),
         Sfx.REEL_STOP to pool.load(context, R.raw.sfx_reel_stop, 1),
@@ -58,7 +59,7 @@ class SoundManager(context: Context) {
 enum class Sfx {
     BET, WIN, WIN_COINS, BIG_WIN, JACKPOT, LOSE, CASHOUT,
     CARD_DEAL, CARD_FLIP, BUTTON,
-    CRASH_RISING,
+    CRASH_RISING, ALARM,
     SLOTS_LEVER, SLOTS_SPINNING, REEL_STOP,
     DICE_ROLL, REVEAL, STREAK,
 }

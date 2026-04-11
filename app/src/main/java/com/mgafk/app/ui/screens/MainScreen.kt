@@ -92,6 +92,7 @@ import com.mgafk.app.ui.screens.minigames.CrashGame
 import com.mgafk.app.ui.screens.minigames.DiceGame
 import com.mgafk.app.ui.screens.minigames.MinesGame
 import com.mgafk.app.ui.screens.minigames.SlotsGame
+import com.mgafk.app.ui.screens.minigames.GameConflictDialog
 import com.mgafk.app.ui.screens.minigames.GamesGrid
 import com.mgafk.app.ui.screens.minigames.HistoryCard
 import com.mgafk.app.ui.screens.minigames.WalletCard
@@ -696,18 +697,24 @@ private fun SectionContent(
                         },
                         onResultShown = { viewModel.applyDiceResult() },
                     )
-                    "crash" -> CrashGame(
-                        casinoBalance = state.casinoBalance,
-                        state = state.crash,
-                        onStart = { amount -> viewModel.startCrash(amount) },
-                        onCashout = { viewModel.cashoutCrash() },
-                        onReset = { viewModel.resetCrash() },
-                        onBack = {
-                            viewModel.resetCrash()
-                            viewModel.fetchCasinoBalance()
-                            currentGame = null
-                        },
-                    )
+                    "crash" -> {
+                        val myPlayer = session.playersList.find { it.id == session.playerId }
+                        CrashGame(
+                            casinoBalance = state.casinoBalance,
+                            state = state.crash,
+                            playerSnapshot = myPlayer,
+                            gameVersion = session.gameVersion,
+                            gameHost = session.gameUrl,
+                            onStart = { amount -> viewModel.startCrash(amount) },
+                            onCashout = { viewModel.cashoutCrash() },
+                            onReset = { viewModel.resetCrash() },
+                            onBack = {
+                                viewModel.resetCrash()
+                                viewModel.fetchCasinoBalance()
+                                currentGame = null
+                            },
+                        )
+                    }
                     "blackjack" -> BlackjackGame(
                         casinoBalance = state.casinoBalance,
                         state = state.blackjack,
@@ -734,6 +741,16 @@ private fun SectionContent(
                             viewModel.fetchCasinoBalance()
                             currentGame = null
                         },
+                    )
+                }
+
+                // Game conflict dialog (409 — active game)
+                val conflict = state.gameConflict
+                if (conflict != null) {
+                    GameConflictDialog(
+                        conflict = conflict,
+                        onForfeit = { viewModel.forfeitAndRetry() },
+                        onDismiss = { viewModel.dismissConflict() },
                     )
                 }
             } else {

@@ -218,6 +218,12 @@ data class BlackjackResponse(
 )
 
 @Serializable
+data class ForfeitResponse(
+    val game: String = "",
+    val forfeited: Boolean = true,
+)
+
+@Serializable
 data class CasinoErrorResponse(val error: String? = null, val balance: Long? = null)
 
 // ── API client ──
@@ -316,6 +322,14 @@ object CasinoApi {
             json.decodeFromString<CrashStatusResponse>(body)
         }
 
+    /** Forfeit crash game */
+    suspend fun forfeitCrash(apiKey: String): Result<ForfeitResponse> =
+        safeCall(apiKey, "crashForfeit") {
+            val request = post("/games/crash/forfeit", apiKey, null)
+            val body = execute(request)
+            json.decodeFromString<ForfeitResponse>(body)
+        }
+
     /** Cashout crash game */
     suspend fun cashoutCrash(apiKey: String): Result<CrashCashoutResponse> =
         safeCall(apiKey, "crashCashout") {
@@ -330,6 +344,14 @@ object CasinoApi {
             val request = post("/games/blackjack/start", apiKey, """{"amount":$amount}""")
             val body = execute(request)
             json.decodeFromString<BlackjackResponse>(body)
+        }
+
+    /** Forfeit blackjack game */
+    suspend fun forfeitBlackjack(apiKey: String): Result<ForfeitResponse> =
+        safeCall(apiKey, "blackjackForfeit") {
+            val request = post("/games/blackjack/forfeit", apiKey, null)
+            val body = execute(request)
+            json.decodeFromString<ForfeitResponse>(body)
         }
 
     /** Blackjack hit */
@@ -378,6 +400,14 @@ object CasinoApi {
             val request = post("/games/mines/start", apiKey, """{"amount":$amount,"mineCount":$mineCount}""")
             val body = execute(request)
             json.decodeFromString<MinesStartResponse>(body)
+        }
+
+    /** Forfeit mines game */
+    suspend fun forfeitMines(apiKey: String): Result<ForfeitResponse> =
+        safeCall(apiKey, "minesForfeit") {
+            val request = post("/games/mines/forfeit", apiKey, null)
+            val body = execute(request)
+            json.decodeFromString<ForfeitResponse>(body)
         }
 
     /** Reveal a cell */

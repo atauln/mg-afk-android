@@ -1,19 +1,13 @@
 package com.mgafk.app.ui.screens.minigames
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,13 +25,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -51,12 +42,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +61,7 @@ import com.mgafk.app.ui.theme.SurfaceBorder
 import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
+import kotlinx.coroutines.delay
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -83,6 +75,16 @@ private val MineColor = StatusError
 private val SafeRevealedBg = GemColor.copy(alpha = 0.15f)
 private val MineBg = MineColor.copy(alpha = 0.15f)
 private val HiddenBg = Color(0xFF1E2A3A)
+private val GoldBright = Color(0xFFFFD700)
+
+// Streak color progression
+private fun streakColor(revealCount: Int): Color = when {
+    revealCount >= 15 -> Color(0xFFFF6B6B) // danger red-pink
+    revealCount >= 10 -> GoldBright         // gold
+    revealCount >= 6 -> Color(0xFFFFA500)   // orange
+    revealCount >= 3 -> StatusConnected     // green
+    else -> GemColor                         // cyan
+}
 
 @Composable
 fun MinesGame(
@@ -95,6 +97,7 @@ fun MinesGame(
     onBack: () -> Unit,
 ) {
     val sound = rememberSoundManager()
+
     // Header
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -117,17 +120,62 @@ fun MinesGame(
     var lastAmount by remember { mutableStateOf("") }
     var lastMineCount by remember { mutableIntStateOf(5) }
 
-    // Sound on reveal / game over
+    // Board shake on mine hit
+    val boardShakeX = remember { Animatable(0f) }
+    val boardShakeY = remember { Animatable(0f) }
+
+    // Cascade reveal tracking for game-over mine reveal
+    var cascadeRevealed by remember { mutableStateOf(emptySet<Int>()) }
+    var showPopup by remember { mutableStateOf(false) }
+
+    // Sound on reveal
     var prevRevealedCount by remember { mutableIntStateOf(0) }
     LaunchedEffect(state.revealed.size) {
-        if (state.revealed.size > prevRevealedCount && prevRevealedCount > 0) {
+        val count = state.revealed.size
+        if (count > prevRevealedCount) {
             sound.play(Sfx.REVEAL)
         }
-        prevRevealedCount = state.revealed.size
+        if (count >= 8 && prevRevealedCount < 8) {
+            // Start alarm-like tension at high streaks
+            sound.play(Sfx.ALARM, 0.3f)
+        }
+        prevRevealedCount = count
     }
+
+    // Game over effects
     LaunchedEffect(state.gameOver) {
         if (state.gameOver) {
-            sound.play(if (state.won == true) Sfx.CASHOUT else Sfx.LOSE)
+            showPopup = false
+            if (state.won == true) {
+                sound.play(Sfx.CASHOUT)
+                delay(300)
+                showPopup = true
+            } else {
+                // Board shake
+                repeat(6) { i ->
+                    val intensity = (6 - i) * 4f
+                    boardShakeX.animateTo(intensity * (if (i % 2 == 0) 1 else -1), tween(40))
+                }
+                boardShakeX.animateTo(0f, tween(40))
+                boardShakeY.snapTo(-3f)
+                boardShakeY.animateTo(0f, tween(100))
+
+                sound.play(Sfx.LOSE)
+
+                // Cascade reveal mines one by one
+                cascadeRevealed = emptySet()
+                state.mines.forEachIndexed { idx, minePos ->
+                    delay(40L + idx * 30L)
+                    cascadeRevealed = cascadeRevealed + minePos
+                    sound.play(Sfx.BUTTON, 0.3f)
+                }
+
+                delay(200)
+                showPopup = true
+            }
+        } else {
+            cascadeRevealed = emptySet()
+            showPopup = false
         }
     }
 
@@ -135,6 +183,7 @@ fun MinesGame(
 
     if (!state.active && !state.gameOver) {
         MinesSetup(
+            balance = casinoBalance,
             error = state.error,
             loading = state.loading,
             initialAmount = lastAmount,
@@ -146,84 +195,145 @@ fun MinesGame(
             },
         )
     } else {
-        MinesBoard(state = state, onReveal = onReveal)
+        // Board with shake + particle overlay
+        Box {
+            Column(
+                modifier = Modifier.graphicsLayer {
+                    translationX = boardShakeX.value
+                    translationY = boardShakeY.value
+                },
+            ) {
+                MinesBoard(
+                    state = state,
+                    cascadeRevealed = cascadeRevealed,
+                    onReveal = onReveal,
+                )
+            }
+
+        }
 
         Spacer(modifier = Modifier.height(8.dp))
 
         if (!state.gameOver) {
+            // Streak banner when doing well
+            val revealCount = state.revealed.size
+            if (revealCount >= 3) {
+                val sColor = streakColor(revealCount)
+                val infiniteTransition = rememberInfiniteTransition(label = "streakPulse")
+                val streakPulse by infiniteTransition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 1.05f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(400, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "streakScale",
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { scaleX = streakPulse; scaleY = streakPulse }
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(sColor.copy(alpha = 0.15f), sColor.copy(alpha = 0.05f), sColor.copy(alpha = 0.15f)),
+                            ),
+                        )
+                        .border(1.dp, sColor.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                        .padding(vertical = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "$revealCount safe reveals!",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = sColor,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             MinesInfoBar(state = state)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Pulsing cashout button
+            // Cashout button with escalating glow
             val canCashout = state.revealed.isNotEmpty() && !state.loading
+            val cashoutColor = streakColor(revealCount)
             val infiniteTransition = rememberInfiniteTransition(label = "minesCashout")
             val cashoutPulse by infiniteTransition.animateFloat(
                 initialValue = 1f,
-                targetValue = if (canCashout) 1.03f else 1f,
+                targetValue = if (canCashout) 1.04f else 1f,
                 animationSpec = infiniteRepeatable(
-                    animation = tween(500, easing = FastOutSlowInEasing),
+                    animation = tween(450, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse,
                 ),
                 label = "minesCashoutPulse",
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer { scaleX = cashoutPulse; scaleY = cashoutPulse }
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (canCashout) Brush.verticalGradient(
-                            listOf(StatusConnected, StatusConnected.copy(alpha = 0.85f))
-                        ) else Brush.verticalGradient(
-                            listOf(TextMuted.copy(alpha = 0.3f), TextMuted.copy(alpha = 0.3f))
-                        ),
-                    )
-                    .clickable(enabled = canCashout) { onCashout() }
-                    .padding(vertical = 14.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                val text = if (state.revealed.isNotEmpty())
-                    "Cashout ${numberFormat.format(state.currentPayout)} (x${String.format("%.2f", state.currentMultiplier)})"
-                else "Reveal a cell first"
-                Text(text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (canCashout) SurfaceDark else TextMuted)
-            }
-        } else {
-            MinesResult(state = state)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(SurfaceBorder)
-                        .clickable { onReset(); onBack() }
-                        .padding(vertical = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("Back", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Box(contentAlignment = Alignment.Center) {
+                // Glow behind cashout button
+                if (canCashout && revealCount >= 3) {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                    ) {
+                        drawRoundRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    cashoutColor.copy(alpha = 0.2f),
+                                    Color.Transparent,
+                                ),
+                                center = Offset(size.width / 2f, size.height / 2f),
+                                radius = size.width * 0.5f,
+                            ),
+                            size = size,
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(12.dp.toPx()),
+                        )
+                    }
                 }
+
                 Box(
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
+                        .graphicsLayer { scaleX = cashoutPulse; scaleY = cashoutPulse }
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Accent)
-                        .clickable {
-                            val lastBet = state.bet
-                            val lastMines = state.mineCount
-                            onReset()
-                            onStart(lastBet, lastMines)
-                        }
+                        .background(
+                            if (canCashout) Brush.horizontalGradient(
+                                listOf(cashoutColor, cashoutColor.copy(alpha = 0.85f)),
+                            ) else Brush.horizontalGradient(
+                                listOf(TextMuted.copy(alpha = 0.3f), TextMuted.copy(alpha = 0.3f)),
+                            ),
+                        )
+                        .clickable(enabled = canCashout) { onCashout() }
                         .padding(vertical = 14.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("Replay ${numberFormat.format(state.bet)}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = SurfaceDark)
+                    val text = if (state.revealed.isNotEmpty())
+                        "Cashout ${numberFormat.format(state.currentPayout)} (x${String.format("%.2f", state.currentMultiplier)})"
+                    else "Reveal a cell first"
+                    Text(text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = if (canCashout) SurfaceDark else TextMuted)
                 }
             }
         }
+    }
+
+    if (state.gameOver) {
+        ResultPopup(
+            visible = showPopup,
+            won = state.won == true,
+            title = if (state.won == true) "You Won!" else "Locked!",
+            subtitle = if (state.won == true) "x${String.format("%.2f", state.currentMultiplier)}" else null,
+            bet = state.bet,
+            payout = state.payout,
+            onReplay = {
+                val lastBet = state.bet
+                val lastMines = state.mineCount
+                onReset()
+                onStart(lastBet, lastMines)
+            },
+            onBack = { onReset() },
+        )
     }
 }
 
@@ -231,6 +341,7 @@ fun MinesGame(
 
 @Composable
 private fun MinesSetup(
+    balance: Long?,
     error: String?,
     loading: Boolean,
     initialAmount: String = "",
@@ -251,44 +362,7 @@ private fun MinesSetup(
             )
             Spacer(modifier = Modifier.height(10.dp))
 
-            OutlinedTextField(
-                value = amount,
-                onValueChange = { new -> amount = new.filter { it.isDigit() } },
-                label = { Text("Bet amount") },
-                placeholder = { Text("Max 25,000") },
-                leadingIcon = {
-                    AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Accent, unfocusedBorderColor = SurfaceBorder,
-                    focusedLabelColor = Accent, cursorColor = Accent,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf("100", "500", "1000", "5000").forEach { preset ->
-                    val isSelected = amount == preset
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isSelected) Accent.copy(alpha = 0.15f) else Accent.copy(alpha = 0.06f))
-                            .border(1.dp, if (isSelected) Accent.copy(alpha = 0.4f) else Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                            .clickable { amount = preset }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(preset, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) Accent else TextPrimary)
-                    }
-                }
-            }
+            BetInput(amount = amount, onAmountChange = { amount = it }, balance = balance, maxBet = 25_000)
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -348,26 +422,64 @@ private fun MinesSetup(
 // ── Board ──
 
 @Composable
-private fun MinesBoard(state: MinesUiState, onReveal: (Int) -> Unit) {
-    AppCard {
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(5),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(340.dp)
-                .padding(bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(25) { pos ->
-                MineCell(
-                    pos = pos,
-                    isRevealed = pos in state.revealed,
-                    isMine = pos in state.mines,
-                    gameOver = state.gameOver,
-                    loading = state.loading,
-                    onReveal = onReveal,
+private fun MinesBoard(
+    state: MinesUiState,
+    cascadeRevealed: Set<Int>,
+    onReveal: (Int) -> Unit,
+) {
+    // Danger glow around board based on revealed count
+    val revealCount = state.revealed.size
+    val dangerColor = streakColor(revealCount)
+
+    Box {
+        // Glow canvas behind the board
+        if (state.active && revealCount >= 2) {
+            Canvas(
+                modifier = Modifier
+                    .matchParentSize()
+                    .padding(0.dp),
+            ) {
+                drawRoundRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            dangerColor.copy(alpha = 0.08f),
+                            Color.Transparent,
+                        ),
+                        center = Offset(size.width / 2f, size.height / 2f),
+                        radius = size.width * 0.6f,
+                    ),
+                    size = size,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f),
                 )
+            }
+        }
+
+        AppCard {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(5),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(340.dp)
+                    .padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(25) { pos ->
+                    val isMineRevealed = if (state.gameOver && state.won != true) {
+                        pos in cascadeRevealed
+                    } else {
+                        pos in state.mines
+                    }
+                    MineCell(
+                        pos = pos,
+                        isRevealed = pos in state.revealed,
+                        isMine = isMineRevealed,
+                        isMineActual = pos in state.mines,
+                        gameOver = state.gameOver,
+                        revealCount = revealCount,
+                        onReveal = onReveal,
+                    )
+                }
             }
         }
     }
@@ -378,84 +490,79 @@ private fun MineCell(
     pos: Int,
     isRevealed: Boolean,
     isMine: Boolean,
+    isMineActual: Boolean,
     gameOver: Boolean,
-    loading: Boolean,
+    revealCount: Int,
     onReveal: (Int) -> Unit,
 ) {
-    val isClickable = !isRevealed && !gameOver && !loading
+    val isClickable = !isRevealed && !gameOver && !isMineActual
 
-    // Scale animation when revealed
-    val revealScale = remember { Animatable(1f) }
+    // Fast flip animation
+    val flipRotation = remember { Animatable(0f) }
+    var hasFlipped by remember { mutableStateOf(false) }
+
     LaunchedEffect(isRevealed, isMine) {
-        if (isRevealed || isMine) {
-            revealScale.snapTo(0f)
-            revealScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium))
+        if ((isRevealed || isMine) && !hasFlipped) {
+            hasFlipped = true
+            flipRotation.snapTo(0f)
+            flipRotation.animateTo(180f, tween(180))
         }
     }
 
-    // Shake on mine hit
-    val mineShakeX = remember { Animatable(0f) }
-    LaunchedEffect(isMine) {
-        if (isMine) {
-            repeat(4) {
-                val intensity = (4 - it) * 3f
-                mineShakeX.animateTo(intensity, tween(30))
-                mineShakeX.animateTo(-intensity, tween(30))
-            }
-            mineShakeX.animateTo(0f, tween(30))
+    // Reset flip state when game resets
+    LaunchedEffect(gameOver, isRevealed, isMine) {
+        if (!gameOver && !isRevealed && !isMine) {
+            hasFlipped = false
+            flipRotation.snapTo(0f)
         }
     }
 
-    val bgColor by animateColorAsState(
-        targetValue = when {
-            isMine -> MineBg
-            isRevealed -> SafeRevealedBg
-            else -> HiddenBg
-        },
-        animationSpec = tween(300),
-        label = "cell_$pos",
-    )
+    val showBack = flipRotation.value > 90f
+
+    val bgColor = when {
+        isMine && showBack -> MineBg
+        isRevealed && showBack -> SafeRevealedBg
+        else -> HiddenBg
+    }
     val borderColor = when {
-        isMine -> MineColor.copy(alpha = 0.5f)
-        isRevealed -> GemColor.copy(alpha = 0.3f)
+        isMine && showBack -> MineColor.copy(alpha = 0.6f)
+        isRevealed && showBack -> GemColor.copy(alpha = 0.4f)
         else -> SurfaceBorder
     }
 
     Box(
         modifier = Modifier
             .aspectRatio(1f)
-            .graphicsLayer { translationX = mineShakeX.value }
+            .graphicsLayer {
+                rotationY = flipRotation.value
+                cameraDistance = 12f * density
+            }
             .clip(RoundedCornerShape(10.dp))
             .background(bgColor)
             .border(1.dp, borderColor, RoundedCornerShape(10.dp))
             .clickable(enabled = isClickable) { onReveal(pos) },
         contentAlignment = Alignment.Center,
     ) {
-        when {
-            isMine -> {
-                AsyncImage(
-                    model = MINE_SPRITE_URL, contentDescription = "Mine",
-                    modifier = Modifier
-                        .size(28.dp)
-                        .graphicsLayer {
-                            scaleX = revealScale.value
-                            scaleY = revealScale.value
-                        },
-                )
+        if (showBack) {
+            // Revealed content (mirrored to account for rotationY)
+            Box(modifier = Modifier.graphicsLayer { rotationY = 180f }) {
+                when {
+                    isMine -> {
+                        AsyncImage(
+                            model = MINE_SPRITE_URL, contentDescription = "Mine",
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                    isRevealed -> {
+                        AsyncImage(
+                            model = GEM_SPRITE_URL, contentDescription = "Gem",
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
             }
-            isRevealed -> {
-                AsyncImage(
-                    model = GEM_SPRITE_URL, contentDescription = "Gem",
-                    modifier = Modifier
-                        .size(28.dp)
-                        .graphicsLayer {
-                            scaleX = revealScale.value
-                            scaleY = revealScale.value
-                        },
-                )
-            }
-            gameOver -> { /* dim empty */ }
-            else -> {
+        } else {
+            if (!gameOver) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
@@ -471,73 +578,46 @@ private fun MineCell(
 
 @Composable
 private fun MinesInfoBar(state: MinesUiState) {
+    val revealCount = state.revealed.size
+    val multColor = streakColor(revealCount)
+
+    // Multiplier pulse
+    val infiniteTransition = rememberInfiniteTransition(label = "multPulse")
+    val multScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (revealCount >= 3) 1.08f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "multPulseScale",
+    )
+
     AppCard {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             InfoCell("Bet", numberFormat.format(state.bet), TextPrimary)
-            InfoCell("Payout", numberFormat.format(state.currentPayout), StatusConnected)
+            InfoCell(
+                "Payout",
+                numberFormat.format(state.currentPayout),
+                multColor,
+                scale = if (revealCount >= 3) multScale else 1f,
+            )
             InfoCell("Next", "x${String.format("%.2f", state.nextMultiplier)}", GemColor)
-            InfoCell("Safe", "${state.safeRemaining}", TextMuted)
+            InfoCell("Safe", "${state.safeRemaining}", if (state.safeRemaining <= 3) MineColor else TextMuted)
         }
     }
 }
 
 @Composable
-private fun InfoCell(label: String, value: String, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun InfoCell(label: String, value: String, color: Color, scale: Float = 1f) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+    ) {
         Text(label, fontSize = 10.sp, color = TextMuted)
         Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = color)
-    }
-}
-
-// ── Result ──
-
-@Composable
-private fun MinesResult(state: MinesUiState) {
-    val won = state.won == true
-    val color = if (won) StatusConnected else StatusError
-
-    // Scale-in the result
-    val resultScale = remember { Animatable(0.5f) }
-    LaunchedEffect(Unit) {
-        resultScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
-    }
-
-    AppCard {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer { scaleX = resultScale.value; scaleY = resultScale.value }
-                .clip(RoundedCornerShape(12.dp))
-                .background(color.copy(alpha = 0.1f))
-                .border(1.dp, color.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                .padding(16.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    if (won) "You Won!" else "Locked!",
-                    fontSize = 22.sp, fontWeight = FontWeight.Bold, color = color,
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        if (won) "+${numberFormat.format(state.payout)}" else "-${numberFormat.format(state.bet)}",
-                        fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace, color = color,
-                    )
-                }
-                if (won && state.currentMultiplier > 0) {
-                    Text(
-                        "x${String.format("%.2f", state.currentMultiplier)}",
-                        fontSize = 13.sp, color = color.copy(alpha = 0.7f),
-                    )
-                }
-            }
-        }
     }
 }

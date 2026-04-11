@@ -243,93 +243,7 @@ fun BlackjackGame(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     if (isDone) {
-                        // Result banner with scale-in
-                        AnimatedVisibility(
-                            visible = showResultBanner,
-                            enter = scaleIn(
-                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-                                initialScale = 0.5f,
-                            ) + fadeIn(),
-                        ) {
-                            val resultInfo = getResultInfo(resp.result)
-                            val bannerColor = resultInfo.color
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(bannerColor.copy(alpha = 0.1f))
-                                    .border(1.dp, bannerColor.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text(
-                                        resultInfo.title, fontSize = 22.sp,
-                                        fontWeight = FontWeight.Bold, color = bannerColor,
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        resultInfo.subtitle, fontSize = 12.sp,
-                                        color = bannerColor.copy(alpha = 0.7f),
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        val payoutText = when {
-                                            resp.payout > resp.bet -> "+${numberFormat.format(resp.payout)}"
-                                            resp.payout == resp.bet -> "${numberFormat.format(resp.payout)} (refund)"
-                                            else -> "-${numberFormat.format(resp.bet)}"
-                                        }
-                                        Text(
-                                            payoutText, fontSize = 18.sp,
-                                            fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace,
-                                            color = bannerColor,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        AnimatedVisibility(
-                            visible = showResultBanner,
-                            enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(SurfaceBorder)
-                                        .clickable { onReset(); onBack() }
-                                        .padding(vertical = 14.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text("Back", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Accent)
-                                        .clickable {
-                                            val lastBet = resp.bet
-                                            onReset()
-                                            onStart(lastBet)
-                                        }
-                                        .padding(vertical = 14.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text("Replay ${numberFormat.format(resp.bet)}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = SurfaceDark)
-                                }
-                            }
-                        }
+                        // popup handles result
                     } else if (isPlaying) {
                         // Action buttons with slide-in
                         AnimatedVisibility(
@@ -412,44 +326,7 @@ fun BlackjackGame(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    OutlinedTextField(
-                        value = amount,
-                        onValueChange = { new -> amount = new.filter { it.isDigit() } },
-                        label = { Text("Bet amount") },
-                        placeholder = { Text("Max 30,000") },
-                        leadingIcon = {
-                            AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                        },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Accent, unfocusedBorderColor = SurfaceBorder,
-                            focusedLabelColor = Accent, cursorColor = Accent,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf("100", "500", "1000", "5000").forEach { preset ->
-                            val isSelected = amount == preset
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Accent.copy(alpha = 0.15f) else Accent.copy(alpha = 0.06f))
-                                    .border(1.dp, if (isSelected) Accent.copy(alpha = 0.4f) else Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                                    .clickable { amount = preset }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(preset, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) Accent else TextPrimary)
-                            }
-                        }
-                    }
+                    BetInput(amount = amount, onAmountChange = { amount = it }, balance = casinoBalance)
 
                     if (state.error != null) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -479,6 +356,25 @@ fun BlackjackGame(
                 }
             }
         }
+    }
+
+    if (isDone && resp != null) {
+        val resultInfo = getResultInfo(resp.result)
+        val bjWon = resp.result in listOf("blackjack", "win", "dealer_bust")
+        ResultPopup(
+            visible = showResultBanner,
+            won = bjWon,
+            title = resultInfo.title,
+            subtitle = resultInfo.subtitle,
+            bet = resp.bet,
+            payout = resp.payout,
+            onReplay = {
+                val lastBet = resp.bet
+                onReset()
+                onStart(lastBet)
+            },
+            onBack = { onReset() },
+        )
     }
 }
 

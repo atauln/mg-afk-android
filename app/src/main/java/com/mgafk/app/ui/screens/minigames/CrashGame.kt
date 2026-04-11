@@ -1,6 +1,5 @@
 package com.mgafk.app.ui.screens.minigames
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -13,10 +12,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,53 +22,64 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.mgafk.app.R
+import com.mgafk.app.data.model.PlayerSnapshot
 import com.mgafk.app.ui.CrashUiState
 import com.mgafk.app.ui.components.AppCard
 import com.mgafk.app.ui.theme.Accent
 import com.mgafk.app.ui.theme.StatusConnected
 import com.mgafk.app.ui.theme.StatusError
-import com.mgafk.app.ui.theme.SurfaceBorder
 import com.mgafk.app.ui.theme.SurfaceCard
 import com.mgafk.app.ui.theme.SurfaceDark
 import com.mgafk.app.ui.theme.TextMuted
@@ -80,15 +88,89 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.sin
 
 private val numberFormat = NumberFormat.getNumberInstance(Locale.US)
+
+// ── Background themes per milestone ──
+private data class SpaceTheme(
+    val topColor: Color,
+    val bottomColor: Color,
+    val starColor: Color,
+    val label: String,
+)
+
+private val THEME_LAUNCH = SpaceTheme(
+    topColor = Color(0xFF0A1628),
+    bottomColor = Color(0xFF1A2940),
+    starColor = Color.White.copy(alpha = 0.4f),
+    label = "LAUNCH",
+)
+private val THEME_SKY = SpaceTheme(
+    topColor = Color(0xFF0D1B2A),
+    bottomColor = Color(0xFF1B3A5C),
+    starColor = Color.White.copy(alpha = 0.5f),
+    label = "ATMOSPHERE",
+)
+private val THEME_SPACE = SpaceTheme(
+    topColor = Color(0xFF050D1A),
+    bottomColor = Color(0xFF0A1628),
+    starColor = Color.White.copy(alpha = 0.7f),
+    label = "SPACE",
+)
+private val THEME_DEEP = SpaceTheme(
+    topColor = Color(0xFF1A0A0A),
+    bottomColor = Color(0xFF2A0F0F),
+    starColor = Color(0xFFFF6B6B).copy(alpha = 0.5f),
+    label = "DANGER ZONE",
+)
+private val THEME_EXTREME = SpaceTheme(
+    topColor = Color(0xFF2A0000),
+    bottomColor = Color(0xFF400A0A),
+    starColor = Color(0xFFFF4444).copy(alpha = 0.6f),
+    label = "CRITICAL",
+)
+
+private fun themeForMultiplier(mult: Double): SpaceTheme = when {
+    mult >= 10.0 -> THEME_EXTREME
+    mult >= 5.0 -> THEME_DEEP
+    mult >= 2.0 -> THEME_SPACE
+    mult >= 1.3 -> THEME_SKY
+    else -> THEME_LAUNCH
+}
+
+// Particle for trail/explosion
+private data class Particle(
+    var x: Float,
+    var y: Float,
+    var vx: Float,
+    var vy: Float,
+    var life: Float,
+    var decay: Float,
+    var size: Float,
+    var color: Color,
+)
+
+// Star in the background
+private data class Star(
+    val xFrac: Float, // 0..1
+    val yFrac: Float, // 0..1
+    val size: Float,
+    val twinkleSpeed: Float,
+    val twinkleOffset: Float,
+)
 
 @Composable
 fun CrashGame(
     casinoBalance: Long?,
     state: CrashUiState,
+    playerSnapshot: PlayerSnapshot?,
+    gameVersion: String,
+    gameHost: String,
     onStart: (amount: Long) -> Unit,
     onCashout: () -> Unit,
     onReset: () -> Unit,
@@ -100,22 +182,75 @@ fun CrashGame(
     var displayMultiplierNoise by remember { mutableDoubleStateOf(0.0) }
     var elapsedMs by remember { mutableLongStateOf(0L) }
     var showBanner by remember { mutableStateOf(false) }
-    // Noise history for the graph (list of time -> noise offset pairs)
     val noiseHistory = remember { mutableListOf<Pair<Long, Double>>() }
+
+    // Milestone tracking
+    var lastMilestone by remember { mutableIntStateOf(0) }
+    val milestoneScale = remember { Animatable(1f) }
+    var milestoneText by remember { mutableStateOf("") }
+    var showMilestone by remember { mutableStateOf(false) }
+
+    // Danger alert state
+    var alarmPlaying by remember { mutableStateOf(false) }
+
+    // Particles for trail + explosion
+    val particles = remember { mutableStateListOf<Particle>() }
+
+
+    // Stars for background (generated once)
+    val stars = remember {
+        List(60) {
+            Star(
+                xFrac = Math.random().toFloat(),
+                yFrac = Math.random().toFloat(),
+                size = 1f + Math.random().toFloat() * 2.5f,
+                twinkleSpeed = 0.5f + Math.random().toFloat() * 2f,
+                twinkleOffset = Math.random().toFloat() * 100f,
+            )
+        }
+    }
+
+    // Rocket position (0 = bottom, 1 = top of scene)
+    var rocketProgress by remember { mutableStateOf(0f) }
+    // When true, rocket is replaced by explosion
+    var rocketExploded by remember { mutableStateOf(false) }
+    // Rocket tilt for turbulence
+    var rocketTilt by remember { mutableStateOf(0f) }
+    // Animated star scroll offset
+    var starScroll by remember { mutableStateOf(0f) }
 
     // Shake on crash
     val crashShakeX = remember { Animatable(0f) }
     val crashShakeY = remember { Animatable(0f) }
-    // Flash overlay alpha
     val flashAlpha = remember { Animatable(0f) }
-    // Multiplier scale punch
     val multScale = remember { Animatable(1f) }
 
-    // Animate multiplier locally with visual turbulence
+    // Rocket shake intensity (increases with multiplier)
+    val rocketShakeIntensity by animateFloatAsState(
+        targetValue = when {
+            !state.active || state.crashed || state.cashedOut -> 0f
+            localMultiplier >= 10.0 -> 6f
+            localMultiplier >= 5.0 -> 4f
+            localMultiplier >= 2.0 -> 2f
+            else -> 0.5f
+        },
+        animationSpec = tween(800),
+        label = "rocketShake",
+    )
+
+    // Animate multiplier + particles + rocket position
     LaunchedEffect(state.active, state.crashed, state.cashedOut) {
         if (state.active && !state.crashed && !state.cashedOut && state.startTime > 0) {
+            showBanner = false
+            lastMilestone = 0
+            showMilestone = false
+            alarmPlaying = false
             sound.play(Sfx.CRASH_RISING, 0.5f, loop = true)
             noiseHistory.clear()
+            particles.clear()
+            rocketProgress = 0f
+            rocketExploded = false
+            starScroll = 0f
             var currentNoise = 0.0
             var noiseTarget = 0.0
             var frameCount = 0
@@ -125,25 +260,72 @@ fun CrashGame(
                 val realMult = exp(state.growthRate * elapsedMs)
                 localMultiplier = realMult
 
-                // Generate turbulence: every ~15 frames pick a new noise target
+                // Rocket progress: log scale normalized for visual
+                val logMult = ln(realMult.coerceAtLeast(1.0))
+                rocketProgress = (logMult / 4.0).toFloat().coerceIn(0f, 0.85f)
+
+                // Star scroll speed increases with multiplier
+                starScroll += (0.002f + rocketProgress * 0.015f)
+
+                // Rocket tilt from noise
+                rocketTilt = (Math.random().toFloat() * 2f - 1f) * rocketShakeIntensity
+
+                // Turbulence
                 if (frameCount % 15 == 0) {
-                    // Noise amplitude scales with multiplier (bigger swings at higher values)
                     val amplitude = (realMult * 0.04).coerceIn(0.01, 0.8)
                     noiseTarget = (Math.random() * 2 - 1) * amplitude
-                    // Occasionally create a bigger dip (10% chance)
                     if (Math.random() < 0.10 && realMult > 1.3) {
                         noiseTarget = -amplitude * 2.5
                     }
                 }
-                // Smoothly interpolate toward target noise
                 currentNoise += (noiseTarget - currentNoise) * 0.12
                 displayMultiplierNoise = currentNoise
 
-                // Record for graph (sample every 5 frames to save memory)
                 if (frameCount % 5 == 0) {
                     noiseHistory.add(elapsedMs to currentNoise)
-                    // Cap history size
                     if (noiseHistory.size > 500) noiseHistory.removeAt(0)
+                }
+
+                // Update particles
+                val iter = particles.listIterator()
+                while (iter.hasNext()) {
+                    val p = iter.next()
+                    p.x += p.vx
+                    p.y += p.vy
+                    p.life -= p.decay
+                    if (p.life <= 0f) iter.remove()
+                }
+                while (particles.size > 100) particles.removeAt(0)
+
+                // Milestone check
+                val milestone = when {
+                    realMult >= 20.0 -> 20
+                    realMult >= 10.0 -> 10
+                    realMult >= 5.0 -> 5
+                    realMult >= 2.0 -> 2
+                    else -> 0
+                }
+                if (milestone > lastMilestone && milestone > 0) {
+                    lastMilestone = milestone
+                    milestoneText = "${milestone}x"
+                    showMilestone = true
+                    sound.play(Sfx.STREAK, 0.6f)
+                    launch {
+                        milestoneScale.snapTo(0.5f)
+                        milestoneScale.animateTo(
+                            1.2f,
+                            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                        )
+                        milestoneScale.animateTo(1f, tween(200))
+                        delay(800)
+                        showMilestone = false
+                    }
+                }
+
+                // Start alarm at 5x
+                if (realMult >= 5.0 && !alarmPlaying) {
+                    alarmPlaying = true
+                    sound.play(Sfx.ALARM, 0.4f, loop = true)
                 }
 
                 frameCount++
@@ -152,63 +334,193 @@ fun CrashGame(
         }
     }
 
-    // On crash: shake + red flash
-    LaunchedEffect(state.crashed) {
-        if (state.crashed) {
-            localMultiplier = state.crashPoint
-            displayMultiplierNoise = 0.0
-            showBanner = false
-            sound.stop(Sfx.CRASH_RISING)
-            sound.play(Sfx.JACKPOT)
-
-            // Red flash
-            launch {
-                flashAlpha.animateTo(0.3f, tween(80))
-                flashAlpha.animateTo(0f, tween(400))
-            }
-
-            // Shake
-            repeat(6) {
-                val intensity = (6 - it) * 4f
-                crashShakeX.animateTo((-intensity..intensity).random().toFloat(), tween(40))
-                crashShakeY.animateTo((-intensity * 0.5f..intensity * 0.5f).random().toFloat(), tween(40))
-            }
-            crashShakeX.animateTo(0f, tween(50))
-            crashShakeY.animateTo(0f, tween(50))
-
-            delay(400)
-            showBanner = true
-        }
-    }
-
-    // On cashout: green pulse
-    LaunchedEffect(state.cashedOut) {
-        if (state.cashedOut) {
-            localMultiplier = state.multiplier
-            displayMultiplierNoise = 0.0
-            showBanner = false
-            sound.stop(Sfx.CRASH_RISING)
-            sound.play(Sfx.CASHOUT)
-            multScale.animateTo(1.3f, tween(200))
-            multScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-            delay(300)
-            showBanner = true
-        }
-    }
-
     val gameOver = state.crashed || state.cashedOut
 
-    // Pulsing cashout button
+    // Game over effect
+    LaunchedEffect(gameOver) {
+        if (!gameOver) return@LaunchedEffect
+        displayMultiplierNoise = 0.0
+        showBanner = false
+        showMilestone = false
+        sound.stop(Sfx.CRASH_RISING)
+        if (alarmPlaying) {
+            sound.stop(Sfx.ALARM)
+            alarmPlaying = false
+        }
+
+        if (state.crashed) {
+            localMultiplier = state.crashPoint
+            rocketTilt = 0f
+            rocketExploded = true
+
+            // Big explosion — lots of particles in all directions
+            repeat(80) {
+                val angle = Math.random() * 2 * PI
+                val speed = 1f + Math.random().toFloat() * 12f
+                particles.add(
+                    Particle(
+                        x = (Math.random() * 10 - 5).toFloat(),
+                        y = (Math.random() * 10 - 5).toFloat(),
+                        vx = (cos(angle) * speed).toFloat(),
+                        vy = (sin(angle) * speed).toFloat(),
+                        life = 1f,
+                        decay = 0.008f + Math.random().toFloat() * 0.015f,
+                        size = 2f + Math.random().toFloat() * 8f,
+                        color = listOf(
+                            StatusError,
+                            Color(0xFFFF6B00),
+                            Color(0xFFFFD700),
+                            Color(0xFFFF4400),
+                            Color.White,
+                        ).random(),
+                    ),
+                )
+            }
+            // Debris chunks (bigger, slower)
+            repeat(15) {
+                val angle = Math.random() * 2 * PI
+                val speed = 2f + Math.random().toFloat() * 5f
+                particles.add(
+                    Particle(
+                        x = 0f, y = 0f,
+                        vx = (cos(angle) * speed).toFloat(),
+                        vy = (sin(angle) * speed).toFloat(),
+                        life = 1f,
+                        decay = 0.006f + Math.random().toFloat() * 0.008f,
+                        size = 6f + Math.random().toFloat() * 10f,
+                        color = listOf(
+                            Color(0xFF888888),
+                            Color(0xFFAAAAAA),
+                            Color(0xFF6C8CFF).copy(alpha = 0.7f),
+                        ).random(),
+                    ),
+                )
+            }
+
+            sound.play(Sfx.LOSE)
+            launch {
+                flashAlpha.animateTo(0.4f, tween(50))
+                flashAlpha.animateTo(0f, tween(600))
+            }
+            repeat(10) {
+                val intensity = (10 - it) * 6f
+                crashShakeX.animateTo((-intensity..intensity).random().toFloat(), tween(30))
+                crashShakeY.animateTo((-intensity * 0.6f..intensity * 0.6f).random().toFloat(), tween(30))
+            }
+            crashShakeX.animateTo(0f, tween(60))
+            crashShakeY.animateTo(0f, tween(60))
+            delay(400)
+        } else {
+            localMultiplier = state.multiplier
+            sound.play(Sfx.CASHOUT)
+            rocketTilt = 0f
+
+            // Green sparkles
+            repeat(20) {
+                val angle = Math.random() * 2 * PI
+                val speed = 1.5f + Math.random().toFloat() * 5f
+                particles.add(
+                    Particle(
+                        x = 0f, y = 0f,
+                        vx = (cos(angle) * speed).toFloat(),
+                        vy = (sin(angle) * speed).toFloat(),
+                        life = 1f,
+                        decay = 0.018f + Math.random().toFloat() * 0.02f,
+                        size = 2f + Math.random().toFloat() * 4f,
+                        color = listOf(StatusConnected, Color(0xFF90EE90), Color(0xFFFFD700), Color.White).random(),
+                    ),
+                )
+            }
+
+            multScale.animateTo(1.5f, tween(120))
+            multScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+            delay(300)
+        }
+
+        // Fade out particles
+        launch {
+            repeat(40) {
+                val iter = particles.listIterator()
+                while (iter.hasNext()) {
+                    val p = iter.next()
+                    p.x += p.vx
+                    p.y += p.vy
+                    p.vx *= 0.94f
+                    p.vy *= 0.94f
+                    p.life -= p.decay
+                    if (p.life <= 0f) iter.remove()
+                }
+                delay(33)
+            }
+            particles.clear()
+        }
+
+        showBanner = true
+    }
+
+    // Cashout pulse — accelerates with multiplier
+    val pulseDuration = when {
+        localMultiplier >= 10.0 -> 180
+        localMultiplier >= 5.0 -> 280
+        localMultiplier >= 2.0 -> 400
+        else -> 600
+    }
     val infiniteTransition = rememberInfiniteTransition(label = "cashoutPulse")
     val cashoutPulse by infiniteTransition.animateFloat(
         initialValue = 1f,
-        targetValue = 1.04f,
+        targetValue = 1.07f,
         animationSpec = infiniteRepeatable(
-            animation = tween(600, easing = FastOutSlowInEasing),
+            animation = tween(pulseDuration, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "cashoutScale",
     )
+
+    // Danger border glow
+    val dangerAlpha by animateFloatAsState(
+        targetValue = when {
+            !state.active || gameOver -> 0f
+            localMultiplier >= 10.0 -> 0.7f
+            localMultiplier >= 5.0 -> 0.4f
+            localMultiplier >= 2.0 -> 0.15f
+            else -> 0f
+        },
+        animationSpec = tween(800),
+        label = "dangerAlpha",
+    )
+    val dangerColor by animateColorAsState(
+        targetValue = when {
+            localMultiplier >= 10.0 -> StatusError
+            localMultiplier >= 5.0 -> Color(0xFFFFA500)
+            else -> Color(0xFFFFD700)
+        },
+        animationSpec = tween(800),
+        label = "dangerColor",
+    )
+
+    // Danger flash (pulsing red overlay when >= 5x)
+    val dangerFlash by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(500, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "dangerFlash",
+    )
+
+    // Build avatar layer URLs
+    val avatarLayers = remember(playerSnapshot, gameVersion, gameHost) {
+        if (playerSnapshot == null) return@remember emptyList<String>()
+        val host = gameHost.removePrefix("https://").removePrefix("http://").ifBlank { "magicgarden.gg" }
+        val baseUrl = "https://$host/version/$gameVersion/assets/cosmetic"
+        listOf(
+            playerSnapshot.avatarBottom,
+            playerSnapshot.avatarMid,
+            playerSnapshot.avatarTop,
+            playerSnapshot.avatarExpression,
+        ).filter { it.isNotBlank() }.map { "$baseUrl/$it" }
+    }
 
     // Header
     Row(
@@ -235,14 +547,27 @@ fun CrashGame(
 
     Spacer(modifier = Modifier.height(8.dp))
 
-    // Wrap in a box for crash shake + flash overlay
+    // Main card
     Box {
         AppCard(
-            modifier = Modifier.graphicsLayer {
-                translationX = crashShakeX.value
-                translationY = crashShakeY.value
-            },
+            modifier = Modifier
+                .graphicsLayer {
+                    translationX = crashShakeX.value
+                    translationY = crashShakeY.value
+                }
+                .then(
+                    if (dangerAlpha > 0f) {
+                        Modifier.border(
+                            1.5.dp,
+                            dangerColor.copy(alpha = dangerAlpha * 0.5f),
+                            RoundedCornerShape(16.dp),
+                        )
+                    } else Modifier,
+                ),
         ) {
+            val density = LocalDensity.current
+            val context = LocalContext.current
+
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -251,7 +576,7 @@ fun CrashGame(
                     state.active -> {
                         val displayMultiplier = if (gameOver) {
                             if (state.crashed) state.crashPoint else state.multiplier
-                        } else (localMultiplier + displayMultiplierNoise).coerceAtLeast(1.0)
+                        } else localMultiplier.coerceAtLeast(1.0)
 
                         val multiplierColor by animateColorAsState(
                             targetValue = when {
@@ -266,160 +591,353 @@ fun CrashGame(
                             label = "multColor",
                         )
 
-                        // Dynamic font size based on multiplier
                         val fontSize by animateFloatAsState(
                             targetValue = when {
-                                displayMultiplier >= 10.0 -> 56f
-                                displayMultiplier >= 5.0 -> 52f
+                                displayMultiplier >= 10.0 -> 58f
+                                displayMultiplier >= 5.0 -> 54f
                                 displayMultiplier >= 2.0 -> 50f
-                                else -> 48f
+                                else -> 46f
                             },
                             animationSpec = tween(500),
                             label = "fontSize",
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
-                        // Graph
-                        CrashGraph(
-                            elapsedMs = if (gameOver) elapsedMs else (System.currentTimeMillis() - state.startTime),
-                            growthRate = state.growthRate,
-                            crashed = state.crashed,
-                            cashedOut = state.cashedOut,
-                            noiseHistory = noiseHistory,
+                        // ── ROCKET SCENE ──
+                        val currentTheme = themeForMultiplier(displayMultiplier)
+
+                        // Ground scroll: 0 = fully visible, 1+ = off screen
+                        val groundScroll = (starScroll * 10f).coerceIn(0f, 3f)
+
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(SurfaceDark)
-                                .padding(8.dp),
-                        )
+                                .height(380.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                        ) {
+                            // Background canvas (sky + stars + particles)
+                            Canvas(
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                // Sky: stays #052740 while ground is visible, then transitions to space
+                                val imageTopColor = Color(0xFF052740)
+                                // groundScroll hits ~1.7 when image is fully off screen
+                                val skyProgress = ((groundScroll - 1.7f) / 1f).coerceIn(0f, 1f)
+                                val skyTopColor = lerp(imageTopColor, currentTheme.topColor, skyProgress)
+                                val skyBottomColor = lerp(imageTopColor, currentTheme.bottomColor, skyProgress)
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        colors = listOf(skyTopColor, skyBottomColor),
+                                    ),
+                                )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                                // Scrolling stars (fade in only after ground is gone)
+                                val starsVisibility = ((groundScroll - 1.5f) / 0.5f).coerceIn(0f, 1f)
+                                val starAlphaBase = currentTheme.starColor.alpha * starsVisibility
+                                for (star in stars) {
+                                    val sy = ((star.yFrac + starScroll * star.twinkleSpeed) % 1.2f)
+                                    if (sy < 0f || sy > 1f) continue
+                                    val twinkle = (sin((starScroll * star.twinkleSpeed * 10 + star.twinkleOffset).toDouble()) * 0.5 + 0.5).toFloat()
+                                    drawCircle(
+                                        color = currentTheme.starColor.copy(alpha = starAlphaBase * twinkle),
+                                        radius = star.size,
+                                        center = Offset(star.xFrac * size.width, sy * size.height),
+                                    )
+                                }
 
-                        // Big multiplier
-                        Text(
-                            "${"%.2f".format(displayMultiplier)}x",
-                            fontSize = fontSize.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            color = multiplierColor,
-                            modifier = Modifier.graphicsLayer {
-                                scaleX = multScale.value
-                                scaleY = multScale.value
-                            },
-                        )
+                                // Danger zone vignette (red edges when >= 5x)
+                                if (displayMultiplier >= 5.0) {
+                                    val vignetteAlpha = if (displayMultiplier >= 10.0) {
+                                        0.15f + dangerFlash * 0.1f
+                                    } else {
+                                        0.08f + dangerFlash * 0.05f
+                                    }
+                                    // Left edge
+                                    drawRect(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                StatusError.copy(alpha = vignetteAlpha),
+                                                Color.Transparent,
+                                            ),
+                                            startX = 0f,
+                                            endX = size.width * 0.3f,
+                                        ),
+                                    )
+                                    // Right edge
+                                    drawRect(
+                                        Brush.horizontalGradient(
+                                            colors = listOf(
+                                                Color.Transparent,
+                                                StatusError.copy(alpha = vignetteAlpha),
+                                            ),
+                                            startX = size.width * 0.7f,
+                                            endX = size.width,
+                                        ),
+                                    )
+                                    // Top edge
+                                    drawRect(
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                StatusError.copy(alpha = vignetteAlpha * 0.7f),
+                                                Color.Transparent,
+                                            ),
+                                            startY = 0f,
+                                            endY = size.height * 0.25f,
+                                        ),
+                                    )
+                                }
 
-                        if (state.crashed) {
-                            Text("CRASHED!", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = StatusError)
-                        } else if (state.cashedOut) {
-                            Text("CASHED OUT!", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = StatusConnected)
+                            }
+
+                            // Ground image scrolling down (between sky and rocket)
+                            if (groundScroll < 2f) {
+                                Image(
+                                    painter = painterResource(R.drawable.bg_crash_ground),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(380.dp)
+                                        .align(Alignment.BottomCenter)
+                                        .graphicsLayer {
+                                            translationY = groundScroll * 380.dp.toPx() * 0.6f
+                                        },
+                                )
+                            }
+
+                            // Rocket + particles + flame (on top of ground)
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val cx = size.width / 2f
+                                val rocketY = size.height * (1f - rocketProgress) * 0.7f + size.height * 0.15f
+
+                                // Particles
+                                for (p in particles) {
+                                    drawCircle(
+                                        color = p.color.copy(alpha = (p.life * 0.8f).coerceIn(0f, 1f)),
+                                        radius = p.size * p.life,
+                                        center = Offset(cx + p.x, rocketY + p.y),
+                                    )
+                                }
+
+                                if (!rocketExploded) {
+                                    // Flame below rocket
+                                    if (!gameOver) {
+                                        val flameTopY = rocketY + 87f
+                                        val flameHeight = 30f + rocketProgress * 50f
+                                        val flameFlicker = (Math.random() * 8 - 4).toFloat()
+                                        drawRocketFlame(
+                                            cx = cx,
+                                            topY = flameTopY,
+                                            flameHeight = flameHeight + flameFlicker,
+                                            multiplier = displayMultiplier,
+                                        )
+                                    }
+
+                                    // Rocket
+                                    drawRocket(
+                                        cx = cx,
+                                        cy = rocketY,
+                                        tilt = rocketTilt,
+                                        cashedOut = state.cashedOut,
+                                        multiplier = displayMultiplier,
+                                    )
+                                } else {
+                                    // Explosion fireball glow where the rocket was
+                                    drawCircle(
+                                        Brush.radialGradient(
+                                            colors = listOf(
+                                                Color(0xFFFFDD00).copy(alpha = 0.6f),
+                                                Color(0xFFFF6B00).copy(alpha = 0.3f),
+                                                Color.Transparent,
+                                            ),
+                                        ),
+                                        radius = 60f,
+                                        center = Offset(cx, rocketY),
+                                    )
+                                }
+                            }
+
+                            // Avatar in porthole (hidden when rocket exploded)
+                            if (avatarLayers.isNotEmpty() && !rocketExploded) {
+                                val avatarSize = 16.dp
+                                val rocketCenterYFrac = (1f - rocketProgress) * 0.7f + 0.15f
+                                val sceneHeightPx = with(density) { 380.dp.toPx() }
+                                // Porthole offset: bodyTop + 35 relative to rocketY
+                                // bodyTop = cy - 60 + 17.5 = cy - 42.5
+                                // portholeY = cy - 42.5 + 35 = cy - 7.5
+                                val portholeOffsetFrac = -7.5f / sceneHeightPx
+
+                                val avatarSizePx = with(density) { avatarSize.toPx() }
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(avatarSize)
+                                        .align(Alignment.TopCenter)
+                                        .offset {
+                                            IntOffset(
+                                                x = 0,
+                                                y = (sceneHeightPx * (rocketCenterYFrac + portholeOffsetFrac) - avatarSizePx / 2f).toInt(),
+                                            )
+                                        }
+                                        .graphicsLayer {
+                                            rotationZ = rocketTilt * 0.5f
+                                        }
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF1A2940)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    avatarLayers.forEach { url ->
+                                        val model = remember(url) {
+                                            ImageRequest.Builder(context)
+                                                .data(url)
+                                                .crossfade(true)
+                                                .build()
+                                        }
+                                        AsyncImage(
+                                            model = model,
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(avatarSize)
+                                                .graphicsLayer {
+                                                    scaleX = 1.8f
+                                                    scaleY = 1.8f
+                                                    translationY = avatarSize.toPx() * 0.25f
+                                                },
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Milestone popup overlay
+                            if (showMilestone) {
+                                Text(
+                                    milestoneText,
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = Color(0xFFFFD700),
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .graphicsLayer {
+                                            scaleX = milestoneScale.value
+                                            scaleY = milestoneScale.value
+                                            alpha = milestoneScale.value.coerceIn(0f, 1f)
+                                        },
+                                )
+                            }
+
+                            // Zone label (top right)
+                            if (state.active && !gameOver) {
+                                Text(
+                                    currentTheme.label,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = if (displayMultiplier >= 5.0) {
+                                        StatusError.copy(alpha = 0.5f + dangerFlash * 0.3f)
+                                    } else {
+                                        Color.White.copy(alpha = 0.3f)
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp),
+                                )
+                            }
+
+                            // CRASHED / CASHED OUT overlay on scene
+                            if (state.crashed) {
+                                Text(
+                                    "CRASHED!",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = StatusError,
+                                    modifier = Modifier.align(Alignment.Center),
+                                )
+                            } else if (state.cashedOut) {
+                                Text(
+                                    "CASHED OUT!",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = StatusConnected,
+                                    modifier = Modifier.align(Alignment.Center),
+                                )
+                            }
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        // Bet & profit info
+                        // Big multiplier with glow
+                        Box(contentAlignment = Alignment.Center) {
+                            if (!gameOver && displayMultiplier >= 2.0) {
+                                Text(
+                                    "${"%.2f".format(displayMultiplier)}x",
+                                    fontSize = (fontSize + 4).sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = multiplierColor.copy(alpha = 0.12f),
+                                    modifier = Modifier.graphicsLayer {
+                                        scaleX = multScale.value * 1.1f
+                                        scaleY = multScale.value * 1.1f
+                                    },
+                                )
+                            }
+                            Text(
+                                "${"%.2f".format(displayMultiplier)}x",
+                                fontSize = fontSize.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color = multiplierColor,
+                                modifier = Modifier.graphicsLayer {
+                                    scaleX = multScale.value
+                                    scaleY = multScale.value
+                                },
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Bet & live profit
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Bet: ${numberFormat.format(state.bet)}", fontSize = 13.sp, color = TextMuted)
                             if (!gameOver) {
                                 Spacer(modifier = Modifier.width(12.dp))
+                                val profit = ((state.bet * displayMultiplier) - state.bet).toLong()
+                                val profitColor by animateColorAsState(
+                                    targetValue = when {
+                                        profit >= state.bet * 5 -> Color(0xFFFFD700)
+                                        profit >= state.bet -> StatusConnected
+                                        else -> StatusConnected.copy(alpha = 0.7f)
+                                    },
+                                    animationSpec = tween(300),
+                                    label = "profitColor",
+                                )
                                 Text(
-                                    "Profit: ${numberFormat.format(((state.bet * displayMultiplier) - state.bet).toLong())}",
-                                    fontSize = 13.sp, color = StatusConnected, fontWeight = FontWeight.SemiBold,
+                                    "+${numberFormat.format(profit)}",
+                                    fontSize = 13.sp, color = profitColor, fontWeight = FontWeight.SemiBold,
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         if (gameOver) {
-                            // Result banner
-                            AnimatedVisibility(
-                                visible = showBanner,
-                                enter = scaleIn(
-                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                                    initialScale = 0.5f,
-                                ) + fadeIn(),
-                            ) {
-                                val bannerColor = if (state.won) StatusConnected else StatusError
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(bannerColor.copy(alpha = 0.1f))
-                                        .border(1.dp, bannerColor.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(
-                                            if (state.won) "You Won!" else "You Lost",
-                                            fontSize = 22.sp, fontWeight = FontWeight.Bold, color = bannerColor,
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                if (state.won) "+${numberFormat.format(state.payout)}" else "-${numberFormat.format(state.bet)}",
-                                                fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                                                fontFamily = FontFamily.Monospace, color = bannerColor,
-                                            )
-                                        }
-                                        if (state.crashed && !state.won) {
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                "Crashed at ${"%.2f".format(state.crashPoint)}x",
-                                                fontSize = 12.sp, color = TextMuted,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            AnimatedVisibility(
-                                visible = showBanner,
-                                enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(SurfaceBorder)
-                                            .clickable { onReset(); onBack() }
-                                            .padding(vertical = 14.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text("Back", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(Accent)
-                                            .clickable {
-                                                val lastBet = state.bet
-                                                onReset()
-                                                onStart(lastBet)
-                                            }
-                                            .padding(vertical = 14.dp),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text("Replay ${numberFormat.format(state.bet)}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = SurfaceDark)
-                                    }
-                                }
-                            }
+                            // popup handles result
                         } else {
-                            // Pulsing cashout button
+                            // Cashout button with urgency
                             val cashoutAmount = (state.bet * localMultiplier).toLong()
+                            val cashoutBgColor by animateColorAsState(
+                                targetValue = when {
+                                    localMultiplier >= 10.0 -> Color(0xFFFF4444)
+                                    localMultiplier >= 5.0 -> Color(0xFFFFA500)
+                                    localMultiplier >= 2.0 -> Color(0xFFFFD700)
+                                    else -> StatusConnected
+                                },
+                                animationSpec = tween(500),
+                                label = "cashoutBg",
+                            )
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -431,8 +949,8 @@ fun CrashGame(
                                     .background(
                                         Brush.verticalGradient(
                                             colors = listOf(
-                                                StatusConnected,
-                                                StatusConnected.copy(alpha = 0.85f),
+                                                cashoutBgColor,
+                                                cashoutBgColor.copy(alpha = 0.85f),
                                             ),
                                         ),
                                     )
@@ -473,6 +991,90 @@ fun CrashGame(
                     else -> {
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        // Preview of rocket on the ground (idle state)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                        ) {
+                            // Garden background
+                            Image(
+                                painter = painterResource(R.drawable.bg_crash_ground),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                // Dim overlay so rocket is visible
+                                drawRect(Color.Black.copy(alpha = 0.15f))
+
+                                // A few stars barely visible (it's daytime)
+                                for (star in stars.take(8)) {
+                                    drawCircle(
+                                        Color.White.copy(alpha = 0.15f),
+                                        radius = star.size * 0.6f,
+                                        center = Offset(star.xFrac * size.width, star.yFrac * size.height * 0.4f),
+                                    )
+                                }
+                                // Idle rocket
+                                drawRocket(
+                                    cx = size.width / 2f,
+                                    cy = size.height * 0.5f,
+                                    tilt = 0f,
+                                    cashedOut = false,
+                                    multiplier = 1.0,
+                                )
+                            }
+
+                            // Avatar in idle rocket
+                            if (avatarLayers.isNotEmpty()) {
+                                val idleAvatarSize = 16.dp
+                                Box(
+                                    modifier = Modifier
+                                        .size(idleAvatarSize)
+                                        .align(Alignment.Center)
+                                        .offset(y = (-6).dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF1A2940)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    avatarLayers.forEach { url ->
+                                        val model = remember(url) {
+                                            ImageRequest.Builder(context)
+                                                .data(url)
+                                                .crossfade(true)
+                                                .build()
+                                        }
+                                        AsyncImage(
+                                            model = model,
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .size(idleAvatarSize)
+                                                .graphicsLayer {
+                                                    scaleX = 1.8f
+                                                    scaleY = 1.8f
+                                                    translationY = idleAvatarSize.toPx() * 0.25f
+                                                },
+                                        )
+                                    }
+                                }
+                            }
+
+                            Text(
+                                "Ready for launch",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White.copy(alpha = 0.4f),
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 6.dp),
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -503,44 +1105,7 @@ fun CrashGame(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        OutlinedTextField(
-                            value = amount,
-                            onValueChange = { new -> amount = new.filter { it.isDigit() } },
-                            label = { Text("Bet amount") },
-                            placeholder = { Text("Max 30,000") },
-                            leadingIcon = {
-                                AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                            },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Accent, unfocusedBorderColor = SurfaceBorder,
-                                focusedLabelColor = Accent, cursorColor = Accent,
-                            ),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            listOf("100", "500", "1000", "5000").forEach { preset ->
-                                val isSelected = amount == preset
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (isSelected) Accent.copy(alpha = 0.15f) else Accent.copy(alpha = 0.06f))
-                                        .border(1.dp, if (isSelected) Accent.copy(alpha = 0.4f) else Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                                        .clickable { amount = preset }
-                                        .padding(vertical = 8.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(preset, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) Accent else TextPrimary)
-                                }
-                            }
-                        }
+                        BetInput(amount = amount, onAmountChange = { amount = it }, balance = casinoBalance)
 
                         if (state.error != null) {
                             Spacer(modifier = Modifier.height(8.dp))
@@ -563,7 +1128,7 @@ fun CrashGame(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "Start!", fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                                "Launch!", fontSize = 16.sp, fontWeight = FontWeight.Bold,
                                 color = if (canPlay) SurfaceDark else TextMuted,
                             )
                         }
@@ -572,7 +1137,7 @@ fun CrashGame(
             }
         }
 
-        // Red flash overlay on crash
+        // Red flash overlay
         if (flashAlpha.value > 0f) {
             Box(
                 modifier = Modifier
@@ -582,122 +1147,180 @@ fun CrashGame(
             )
         }
     }
+
+    if (gameOver && state.active) {
+        ResultPopup(
+            visible = showBanner,
+            won = state.won,
+            title = if (state.won) "Cashed Out!" else "CRASHED!",
+            subtitle = if (state.crashed) "Crashed at ${"%.2f".format(state.crashPoint)}x" else "Cashed at ${"%.2f".format(state.multiplier)}x",
+            bet = state.bet,
+            payout = state.payout,
+            onReplay = {
+                val lastBet = state.bet
+                onReset()
+                onStart(lastBet)
+            },
+            onBack = { onReset() },
+        )
+    }
 }
 
-// ── Crash graph with gradient fill ──
+// ── Rocket drawing ──
 
-@Composable
-private fun CrashGraph(
-    elapsedMs: Long,
-    growthRate: Double,
-    crashed: Boolean,
+private fun DrawScope.drawRocket(
+    cx: Float,
+    cy: Float,
+    tilt: Float,
     cashedOut: Boolean,
-    noiseHistory: List<Pair<Long, Double>> = emptyList(),
-    modifier: Modifier = Modifier,
+    multiplier: Double,
 ) {
-    val lineColor = when {
-        crashed -> StatusError
-        cashedOut -> StatusConnected
-        else -> StatusConnected
-    }
+    rotate(degrees = tilt, pivot = Offset(cx, cy)) {
+        val bodyWidth = 70f
+        val bodyHeight = 120f
+        val noseHeight = 35f
 
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val pad = 4f
-
-        val totalMs = elapsedMs.coerceAtLeast(2000L).toFloat()
-        // Find the peak multiplier including noise for Y scaling
-        val basePeak = exp(growthRate * totalMs.toDouble()).toFloat()
-        val noisePeak = noiseHistory.maxOfOrNull { exp(growthRate * it.first / 1000.0 * 1000).toFloat() + it.second.toFloat() } ?: 0f
-        val maxMultiplier = maxOf(basePeak, noisePeak, 2f)
-        val logMax = ln(maxMultiplier.toDouble()).toFloat()
-
-        val linePath = Path()
-        val fillPath = Path()
-        val steps = 200
-        var firstPoint = true
-        var lastX = pad
-        var lastY = h - pad
-
-        // Build a noise lookup for quick interpolation
-        fun noiseAt(timeMs: Float): Float {
-            if (noiseHistory.isEmpty()) return 0f
-            val idx = noiseHistory.indexOfLast { it.first <= timeMs.toLong() }
-            if (idx < 0) return 0f
-            if (idx >= noiseHistory.lastIndex) return noiseHistory.last().second.toFloat()
-            val a = noiseHistory[idx]
-            val b = noiseHistory[idx + 1]
-            val frac = ((timeMs - a.first) / (b.first - a.first).coerceAtLeast(1L)).coerceIn(0f, 1f)
-            return (a.second + (b.second - a.second) * frac).toFloat()
+        // Body color changes with multiplier
+        val bodyColor = when {
+            multiplier >= 10.0 -> Color(0xFFFF4444)
+            multiplier >= 5.0 -> Color(0xFFFFA500)
+            else -> Color(0xFFE8ECF0)
+        }
+        val accentColor = when {
+            multiplier >= 10.0 -> Color(0xFFCC0000)
+            multiplier >= 5.0 -> Color(0xFFCC7700)
+            else -> Color(0xFF6C8CFF)
         }
 
-        for (i in 0..steps) {
-            val t = (i.toFloat() / steps) * totalMs
-            if (t > elapsedMs) break
-            val baseMult = exp(growthRate * t.toDouble()).toFloat()
-            val noise = noiseAt(t)
-            val mult = (baseMult + noise).coerceAtLeast(1f)
-            val x = pad + (t / totalMs) * (w - 2 * pad)
-            val logMult = ln(mult.toDouble()).toFloat()
-            val y = h - pad - (logMult / logMax) * (h - 2 * pad)
+        val bodyTop = cy - bodyHeight / 2 + noseHeight / 2
 
-            if (firstPoint) {
-                linePath.moveTo(x, y)
-                fillPath.moveTo(x, h - pad)
-                fillPath.lineTo(x, y)
-                firstPoint = false
-            } else {
-                linePath.lineTo(x, y)
-                fillPath.lineTo(x, y)
-            }
-            lastX = x
-            lastY = y
-        }
-
-        // Close fill path
-        fillPath.lineTo(lastX, h - pad)
-        fillPath.close()
-
-        // Grid lines
-        for (i in 1..3) {
-            val y = h - pad - (i.toFloat() / 4f) * (h - 2 * pad)
-            drawLine(Color.White.copy(alpha = 0.04f), Offset(pad, y), Offset(w - pad, y), 1f)
-        }
-
-        // Baseline
-        drawLine(Color.White.copy(alpha = 0.08f), Offset(pad, h - pad), Offset(w - pad, h - pad), 1f)
-
-        // Gradient fill under curve
-        drawPath(
-            path = fillPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(lineColor.copy(alpha = 0.2f), lineColor.copy(alpha = 0.02f)),
-                startY = 0f,
-                endY = h,
-            ),
-            style = Fill,
+        // Body (rounded rectangle)
+        drawRoundRect(
+            color = bodyColor,
+            topLeft = Offset(cx - bodyWidth / 2, bodyTop),
+            size = Size(bodyWidth, bodyHeight),
+            cornerRadius = CornerRadius(12f, 12f),
         )
 
-        // Main curve
-        drawPath(linePath, lineColor, style = Stroke(width = 3f, cap = StrokeCap.Round))
-
-        // Glow dot at tip
-        if (!crashed) {
-            drawCircle(lineColor.copy(alpha = 0.3f), radius = 8f, center = Offset(lastX, lastY))
-            drawCircle(lineColor, radius = 4f, center = Offset(lastX, lastY))
+        // Nose cone (triangle)
+        val nosePath = Path().apply {
+            moveTo(cx, cy - bodyHeight / 2 - noseHeight / 2 + 3)
+            lineTo(cx - bodyWidth / 2, bodyTop)
+            lineTo(cx + bodyWidth / 2, bodyTop)
+            close()
         }
+        drawPath(nosePath, accentColor)
 
-        // Crash X marker
-        if (crashed) {
-            drawCircle(StatusError.copy(alpha = 0.3f), radius = 12f, center = Offset(lastX, lastY))
-            drawCircle(StatusError, radius = 6f, center = Offset(lastX, lastY))
-            // X cross
-            val crossSize = 5f
-            drawLine(Color.White, Offset(lastX - crossSize, lastY - crossSize), Offset(lastX + crossSize, lastY + crossSize), 2f)
-            drawLine(Color.White, Offset(lastX + crossSize, lastY - crossSize), Offset(lastX - crossSize, lastY + crossSize), 2f)
+        // Porthole window (circle)
+        val portholeY = bodyTop + 35f
+        drawCircle(
+            color = Color(0xFF1A2940),
+            radius = 20f,
+            center = Offset(cx, portholeY),
+        )
+        drawCircle(
+            color = accentColor.copy(alpha = 0.5f),
+            radius = 20f,
+            center = Offset(cx, portholeY),
+            style = Stroke(width = 2f),
+        )
+        // Window shine
+        drawCircle(
+            color = Color.White.copy(alpha = 0.15f),
+            radius = 6f,
+            center = Offset(cx - 6f, portholeY - 7f),
+        )
+
+        // Side fins
+        val finBottom = cy + bodyHeight / 2 + noseHeight / 2
+        // Left fin
+        val leftFin = Path().apply {
+            moveTo(cx - bodyWidth / 2, finBottom - 30f)
+            lineTo(cx - bodyWidth / 2 - 22f, finBottom + 9f)
+            lineTo(cx - bodyWidth / 2, finBottom)
+            close()
+        }
+        drawPath(leftFin, accentColor)
+        // Right fin
+        val rightFin = Path().apply {
+            moveTo(cx + bodyWidth / 2, finBottom - 30f)
+            lineTo(cx + bodyWidth / 2 + 22f, finBottom + 9f)
+            lineTo(cx + bodyWidth / 2, finBottom)
+            close()
+        }
+        drawPath(rightFin, accentColor)
+
+        // Stripe on body
+        drawRoundRect(
+            color = accentColor.copy(alpha = 0.3f),
+            topLeft = Offset(cx - bodyWidth / 2 + 8f, cy + 15f),
+            size = Size(bodyWidth - 16f, 7f),
+            cornerRadius = CornerRadius(3f, 3f),
+        )
+
+        // Second stripe
+        drawRoundRect(
+            color = accentColor.copy(alpha = 0.2f),
+            topLeft = Offset(cx - bodyWidth / 2 + 8f, cy + 27f),
+            size = Size(bodyWidth - 16f, 5f),
+            cornerRadius = CornerRadius(2f, 2f),
+        )
+
+        // Cashout glow
+        if (cashedOut) {
+            drawCircle(StatusConnected.copy(alpha = 0.3f), radius = 40f, center = Offset(cx, cy))
         }
     }
+}
+
+private fun DrawScope.drawRocketFlame(
+    cx: Float,
+    topY: Float,
+    flameHeight: Float,
+    multiplier: Double,
+) {
+    val flameColor1 = when {
+        multiplier >= 10.0 -> Color(0xFFFF0000)
+        multiplier >= 5.0 -> Color(0xFFFF6B00)
+        else -> Color(0xFFFF8C00)
+    }
+    val flameColor2 = when {
+        multiplier >= 10.0 -> Color(0xFFFF4444)
+        multiplier >= 5.0 -> Color(0xFFFFAA00)
+        else -> Color(0xFFFFD700)
+    }
+
+    // Outer flame
+    val outerFlame = Path().apply {
+        moveTo(cx - 22f, topY)
+        lineTo(cx, topY + flameHeight)
+        lineTo(cx + 22f, topY)
+        close()
+    }
+    drawPath(
+        outerFlame,
+        Brush.verticalGradient(
+            colors = listOf(flameColor1.copy(alpha = 0.8f), flameColor2.copy(alpha = 0.2f)),
+            startY = topY,
+            endY = topY + flameHeight,
+        ),
+    )
+
+    // Inner flame (brighter, shorter)
+    val innerFlame = Path().apply {
+        moveTo(cx - 11f, topY)
+        lineTo(cx, topY + flameHeight * 0.6f)
+        lineTo(cx + 11f, topY)
+        close()
+    }
+    drawPath(
+        innerFlame,
+        Brush.verticalGradient(
+            colors = listOf(Color.White.copy(alpha = 0.9f), flameColor2.copy(alpha = 0.3f)),
+            startY = topY,
+            endY = topY + flameHeight * 0.6f,
+        ),
+    )
 }
 
 @Composable

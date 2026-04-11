@@ -1,17 +1,11 @@
 package com.mgafk.app.ui.screens.minigames
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.EaseOutBounce
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,18 +17,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -49,16 +41,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -97,76 +91,107 @@ fun DiceGame(
     var direction by remember { mutableStateOf("over") }
     var animating by remember { mutableStateOf(false) }
     var showResult by remember { mutableStateOf(false) }
-    var displayedRoll by remember { mutableIntStateOf(50) }
     var showBanner by remember { mutableStateOf(false) }
 
-    // Animated circle scale (bounces on result)
+    // Displayed number during roll (slot-style vertical scroll)
+    var displayedRoll by remember { mutableIntStateOf(50) }
+    val slotScrollY = remember { Animatable(0f) }
+
+    // Circle
     val circleScale = remember { Animatable(1f) }
-    // Shake on rolling
-    val shakeX = remember { Animatable(0f) }
-    // Smooth bar position (0..1) animated with Animatable — no jumps
+    val circleGlowAlpha = remember { Animatable(0f) }
+
+    // Bar marker
     val barPosition = remember { Animatable(0.5f) }
+
+    // Shake
+    val shakeX = remember { Animatable(0f) }
 
     LaunchedEffect(result) {
         if (result != null && !showResult) {
             animating = true
             showBanner = false
-            circleScale.snapTo(0.8f)
-            sound.play(Sfx.DICE_ROLL)
+            circleScale.snapTo(1f)
+            circleGlowAlpha.snapTo(0f)
+            slotScrollY.snapTo(0f)
 
-            // Phase 1: sweep the bar smoothly back and forth
-            launch {
-                while (animating) {
-                    val nextPos = (5..95).random() / 100f
-                    // Smooth tween to each new position — long enough to look fluid
-                    barPosition.animateTo(nextPos, tween(400, easing = FastOutSlowInEasing))
-                }
-            }
+            sound.play(Sfx.DICE_ROLL)
+            sound.play(Sfx.SLOTS_SPINNING, 0.4f, loop = true)
 
             // Gentle shake during roll
             launch {
                 while (animating) {
-                    shakeX.animateTo((-4..4).random().toFloat(), tween(100))
+                    shakeX.animateTo((-3..3).random().toFloat(), tween(80))
                 }
-                shakeX.animateTo(0f, tween(80))
+                shakeX.animateTo(0f, tween(60))
             }
 
-            // Numbers slow down progressively
-            var delayMs = 70L
+            // Sweep bar position randomly during roll
+            launch {
+                while (animating) {
+                    barPosition.animateTo(
+                        (5..95).random() / 100f,
+                        tween(250, easing = FastOutSlowInEasing),
+                    )
+                }
+            }
+
+            // Slot-style number scroll — fast then slowing down
+            var delayMs = 50L
             val startTime = System.currentTimeMillis()
-            while (System.currentTimeMillis() - startTime < 2000) {
+            while (System.currentTimeMillis() - startTime < 1200) {
+                // Scroll animation per tick
+                launch {
+                    slotScrollY.snapTo(-30f)
+                    slotScrollY.animateTo(0f, tween(delayMs.toInt().coerceAtLeast(40)))
+                }
                 displayedRoll = (1..100).random()
                 delay(delayMs)
-                delayMs = (delayMs * 1.1f).toLong().coerceAtMost(280)
+                delayMs = (delayMs * 1.12f).toLong().coerceAtMost(200)
             }
 
-            // Phase 2: settle toward final value
-            val steps = listOf(
-                (result.roll + (-6..6).random()).coerceIn(1, 100),
-                (result.roll + (-2..2).random()).coerceIn(1, 100),
+            // Settle toward final value
+            val nearValues = listOf(
+                (result.roll + (-4..4).random()).coerceIn(1, 100),
                 result.roll,
             )
-            for (value in steps) {
+            for (value in nearValues) {
+                launch {
+                    slotScrollY.snapTo(-20f)
+                    slotScrollY.animateTo(0f, tween(200))
+                }
                 displayedRoll = value
-                // Also smoothly move bar to this value
-                launch { barPosition.animateTo(value / 100f, tween(300, easing = FastOutSlowInEasing)) }
-                delay(300)
+                launch { barPosition.animateTo(value / 100f, tween(250, easing = FastOutSlowInEasing)) }
+                delay(250)
             }
 
-            // Final position
-            barPosition.animateTo(result.roll / 100f, tween(200))
+            // Stop spinning sound
+            sound.stop(Sfx.SLOTS_SPINNING)
 
-            // Bounce scale in
-            circleScale.animateTo(1.2f, tween(150))
-            circleScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+            // Final bar snap
+            barPosition.animateTo(result.roll / 100f, tween(150))
 
-            delay(200)
-            animating = false
+            // Result impact
+            val won = result.won
+            launch {
+                circleScale.snapTo(0.85f)
+                circleScale.animateTo(1.15f, tween(120))
+                circleScale.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+            }
+            launch {
+                circleGlowAlpha.snapTo(0.8f)
+                circleGlowAlpha.animateTo(0.3f, tween(500))
+            }
+
+            sound.play(Sfx.REVEAL)
+            delay(250)
+
             showResult = true
-            sound.play(if (result.won) Sfx.WIN else Sfx.LOSE)
+            animating = false
+            sound.play(if (won) Sfx.WIN else Sfx.LOSE)
             onResultShown()
 
-            delay(200)
+            delay(250)
             showBanner = true
         }
     }
@@ -206,178 +231,100 @@ fun DiceGame(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             when {
-                // Animating
-                animating && result != null -> {
+                // Animating or result
+                (animating || showResult) && result != null -> {
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Rolling...", fontSize = 14.sp, color = TextMuted)
-                    Spacer(modifier = Modifier.height(12.dp))
 
-                    Box(
-                        modifier = Modifier
-                            .graphicsLayer {
-                                scaleX = circleScale.value
-                                scaleY = circleScale.value
-                                translationX = shakeX.value
-                            }
-                            .size(110.dp)
-                            .clip(RoundedCornerShape(55.dp))
-                            .background(Accent.copy(alpha = 0.12f))
-                            .border(3.dp, Accent.copy(alpha = 0.5f), RoundedCornerShape(55.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            "$displayedRoll",
-                            fontSize = 42.sp, fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace, color = Accent,
-                        )
+                    if (animating) {
+                        Text("Rolling...", fontSize = 14.sp, color = TextMuted)
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Target bar preview during animation
+                    val rollColor = when {
+                        animating -> Accent
+                        result.won -> StatusConnected
+                        else -> StatusError
+                    }
+
+                    // Circle with glow
+                    Box(contentAlignment = Alignment.Center) {
+                        // Glow behind
+                        if (circleGlowAlpha.value > 0f && showResult) {
+                            Canvas(modifier = Modifier.size(130.dp)) {
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            rollColor.copy(alpha = circleGlowAlpha.value),
+                                            Color.Transparent,
+                                        ),
+                                    ),
+                                    radius = 65f,
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .graphicsLayer {
+                                    scaleX = circleScale.value
+                                    scaleY = circleScale.value
+                                    translationX = shakeX.value
+                                }
+                                .size(110.dp)
+                                .clip(RoundedCornerShape(55.dp))
+                                .background(rollColor.copy(alpha = 0.12f))
+                                .border(3.dp, rollColor.copy(alpha = 0.5f), RoundedCornerShape(55.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            // Slot-style vertical scroll number
+                            Box(
+                                modifier = Modifier
+                                    .size(80.dp, 50.dp)
+                                    .clipToBounds(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "$displayedRoll",
+                                    fontSize = 42.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = rollColor,
+                                    modifier = Modifier.offset {
+                                        IntOffset(0, slotScrollY.value.toInt())
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Progress bar
                     DiceProgressBar(
                         roll = displayedRoll,
                         target = result.target,
                         direction = result.direction,
-                        rolling = true,
+                        rolling = animating,
                         smoothPosition = barPosition.value,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 8.dp),
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
-                // Result
-                showResult && result != null -> {
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    val rollColor = if (result.won) StatusConnected else StatusError
-
-                    // Result circle with bounce
-                    Box(
-                        modifier = Modifier
-                            .graphicsLayer {
-                                scaleX = circleScale.value
-                                scaleY = circleScale.value
-                            }
-                            .size(110.dp)
-                            .clip(RoundedCornerShape(55.dp))
-                            .background(rollColor.copy(alpha = 0.12f))
-                            .border(3.dp, rollColor.copy(alpha = 0.5f), RoundedCornerShape(55.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
+                    if (showResult) {
+                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "${result.roll}",
-                            fontSize = 42.sp, fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace, color = rollColor,
+                            "Roll ${result.direction} ${result.target}",
+                            fontSize = 13.sp, color = TextMuted,
+                        )
+                        Text(
+                            "${result.winChance}% chance  |  x${"%.2f".format(result.multiplier)}",
+                            fontSize = 12.sp, color = TextMuted,
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Progress bar showing where the roll landed
-                    DiceProgressBar(
-                        roll = result.roll,
-                        target = result.target,
-                        direction = result.direction,
-                        rolling = false,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp),
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        "Roll ${result.direction} ${result.target}",
-                        fontSize = 13.sp, color = TextMuted,
-                    )
-                    Text(
-                        "${result.winChance}% chance  |  x${"%.2f".format(result.multiplier)}",
-                        fontSize = 12.sp, color = TextMuted,
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Win/Lose banner with scale-in
-                    AnimatedVisibility(
-                        visible = showBanner,
-                        enter = scaleIn(
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                            initialScale = 0.5f,
-                        ) + fadeIn(),
-                    ) {
-                        val bannerColor = if (result.won) StatusConnected else StatusError
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(bannerColor.copy(alpha = 0.1f))
-                                .border(1.dp, bannerColor.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    if (result.won) "You Won!" else "You Lost",
-                                    fontSize = 22.sp, fontWeight = FontWeight.Bold, color = bannerColor,
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        if (result.won) "+${numberFormat.format(result.payout)}" else "-${numberFormat.format(result.bet)}",
-                                        fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace, color = bannerColor,
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     Spacer(modifier = Modifier.height(16.dp))
-
-                    AnimatedVisibility(
-                        visible = showBanner,
-                        enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(SurfaceBorder)
-                                    .clickable { onReset(); onBack() }
-                                    .padding(vertical = 14.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("Back", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Accent)
-                                    .clickable {
-                                        val lastBet = result.bet
-                                        val lastTarget = result.target
-                                        val lastDir = result.direction
-                                        showResult = false; showBanner = false; onReset()
-                                        onPlay(lastBet, lastTarget, lastDir)
-                                    }
-                                    .padding(vertical = 14.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("Replay ${numberFormat.format(result.bet)}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = SurfaceDark)
-                            }
-                        }
-                    }
                 }
 
                 // Loading
@@ -454,44 +401,7 @@ fun DiceGame(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    OutlinedTextField(
-                        value = amount,
-                        onValueChange = { new -> amount = new.filter { it.isDigit() } },
-                        label = { Text("Bet amount") },
-                        placeholder = { Text("Max 30,000") },
-                        leadingIcon = {
-                            AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
-                        },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Accent, unfocusedBorderColor = SurfaceBorder,
-                            focusedLabelColor = Accent, cursorColor = Accent,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf("100", "500", "1000", "5000").forEach { preset ->
-                            val isSelected = amount == preset
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) Accent.copy(alpha = 0.15f) else Accent.copy(alpha = 0.06f))
-                                    .border(1.dp, if (isSelected) Accent.copy(alpha = 0.4f) else Accent.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
-                                    .clickable { amount = preset }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(preset, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (isSelected) Accent else TextPrimary)
-                            }
-                        }
-                    }
+                    BetInput(amount = amount, onAmountChange = { amount = it }, balance = casinoBalance)
 
                     if (error != null) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -522,9 +432,25 @@ fun DiceGame(
             }
         }
     }
+
+    if (result != null) {
+        ResultPopup(
+            visible = showBanner,
+            won = result.won,
+            title = if (result.won) "You Won!" else "You Lost",
+            subtitle = "Roll ${result.direction} ${result.target}  |  x${"%.2f".format(result.multiplier)}",
+            bet = result.bet,
+            payout = result.payout,
+            onReplay = {
+                showResult = false; showBanner = false; onReset()
+                onPlay(result.bet, result.target, result.direction)
+            },
+            onBack = { showResult = false; showBanner = false; onReset() },
+        )
+    }
 }
 
-// ── Dice progress bar showing 1-100 range, target line, and roll position ──
+// ── Dice progress bar ──
 
 @Composable
 private fun DiceProgressBar(
@@ -535,7 +461,6 @@ private fun DiceProgressBar(
     smoothPosition: Float? = null,
     modifier: Modifier = Modifier,
 ) {
-    // Use pre-animated smooth position if provided, otherwise animate from roll
     val animatedRollPos by animateFloatAsState(
         targetValue = smoothPosition ?: ((roll ?: -1) / 100f),
         animationSpec = if (smoothPosition != null) tween(50) else spring(
@@ -546,7 +471,6 @@ private fun DiceProgressBar(
     )
 
     Column(modifier = modifier) {
-        // Number labels row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -564,7 +488,7 @@ private fun DiceProgressBar(
             val w = size.width
             val h = size.height
             val barY = h * 0.55f
-            val barH = 12f
+            val barH = 14f
             val cornerRadius = CornerRadius(barH / 2, barH / 2)
 
             // Background bar
@@ -580,7 +504,7 @@ private fun DiceProgressBar(
             if (direction == "over") {
                 val startX = targetFraction * w
                 drawRoundRect(
-                    color = StatusConnected.copy(alpha = 0.2f),
+                    color = StatusConnected.copy(alpha = 0.25f),
                     topLeft = Offset(startX, barY - barH / 2),
                     size = Size(w - startX, barH),
                     cornerRadius = cornerRadius,
@@ -588,18 +512,18 @@ private fun DiceProgressBar(
             } else {
                 val endX = targetFraction * w
                 drawRoundRect(
-                    color = StatusConnected.copy(alpha = 0.2f),
+                    color = StatusConnected.copy(alpha = 0.25f),
                     topLeft = Offset(0f, barY - barH / 2),
                     size = Size(endX, barH),
                     cornerRadius = cornerRadius,
                 )
             }
 
-            // Lose zone subtle
+            // Lose zone
             if (direction == "over") {
                 val endX = targetFraction * w
                 drawRoundRect(
-                    color = StatusError.copy(alpha = 0.1f),
+                    color = StatusError.copy(alpha = 0.12f),
                     topLeft = Offset(0f, barY - barH / 2),
                     size = Size(endX, barH),
                     cornerRadius = cornerRadius,
@@ -607,7 +531,7 @@ private fun DiceProgressBar(
             } else {
                 val startX = targetFraction * w
                 drawRoundRect(
-                    color = StatusError.copy(alpha = 0.1f),
+                    color = StatusError.copy(alpha = 0.12f),
                     topLeft = Offset(startX, barY - barH / 2),
                     size = Size(w - startX, barH),
                     cornerRadius = cornerRadius,
@@ -622,7 +546,6 @@ private fun DiceProgressBar(
                 end = Offset(targetX, barY + barH / 2 + 2f),
                 strokeWidth = 2.5f,
             )
-            // Small triangle above the target
             val triSize = 6f
             val triPath = Path().apply {
                 moveTo(targetX - triSize, barY - barH / 2 - 4f)
@@ -632,7 +555,7 @@ private fun DiceProgressBar(
             }
             drawPath(triPath, Color.White.copy(alpha = 0.7f))
 
-            // Roll marker (animated)
+            // Roll marker
             if (roll != null && animatedRollPos >= 0f) {
                 val rollX = (animatedRollPos * w).coerceIn(8f, w - 8f)
                 val won = if (direction == "over") roll > target else roll < target
@@ -640,23 +563,20 @@ private fun DiceProgressBar(
 
                 // Glow
                 drawCircle(
-                    color = markerColor.copy(alpha = 0.25f),
-                    radius = 16f,
+                    color = markerColor.copy(alpha = 0.3f),
+                    radius = 18f,
                     center = Offset(rollX, barY),
                 )
-                // Outer circle
                 drawCircle(
                     color = markerColor,
                     radius = 11f,
                     center = Offset(rollX, barY),
                 )
-                // Inner circle
                 drawCircle(
                     color = Color.White,
                     radius = 6f,
                     center = Offset(rollX, barY),
                 )
-                // Inner colored dot
                 drawCircle(
                     color = markerColor,
                     radius = 3.5f,
