@@ -195,16 +195,15 @@ class CasinoViewModel : ViewModel() {
         depositPollJob?.cancel()
         depositPollJob = viewModelScope.launch {
             AppLog.d(TAG, "[Deposit] Polling started")
+            var consecutiveErrors = 0
             while (true) {
-                delay(3_000)
+                delay(if (consecutiveErrors > 0) 5_000 else 3_000)
                 val dep = _state.value.deposit
-                AppLog.d(TAG, "[Deposit] Loop check: active=${dep.active}, status=${dep.status}")
                 if (!dep.active || dep.status != "pending") break
 
-                AppLog.d(TAG, "[Deposit] Polling status...")
                 CasinoApi.getDepositStatus(apiKey)
                     .onSuccess { info ->
-                        AppLog.d(TAG, "[Deposit] Poll result: ${info?.status}")
+                        consecutiveErrors = 0
                         if (info == null) {
                             _state.update { it.copy(deposit = DepositUiState()) }
                             return@launch
@@ -219,7 +218,11 @@ class CasinoViewModel : ViewModel() {
                             "expired", "cancelled" -> return@launch
                         }
                     }
-                    .onFailure { return@launch }
+                    .onFailure { e ->
+                        consecutiveErrors++
+                        AppLog.d(TAG, "[Deposit] Poll failed ($consecutiveErrors): ${e.message}")
+                        // Keep polling — don't stop on transient network errors
+                    }
             }
         }
     }
@@ -304,19 +307,17 @@ class CasinoViewModel : ViewModel() {
                     .onSuccess { resp ->
                         _state.update { it.copy(withdraw = it.withdraw.copy(status = resp.status, position = resp.position)) }
                         when (resp.status) {
-                            "completed" -> {
-                                fetchCasinoBalance()
-                                fetchTransactions()
-                                return@launch
-                            }
-                            "failed" -> {
+                            "completed", "failed" -> {
                                 fetchCasinoBalance()
                                 fetchTransactions()
                                 return@launch
                             }
                         }
                     }
-                    .onFailure { return@launch }
+                    .onFailure { e ->
+                        AppLog.d(TAG, "[Withdraw] Poll failed: ${e.message}")
+                        // Keep polling — don't stop on transient network errors
+                    }
             }
         }
     }
@@ -425,14 +426,18 @@ class CasinoViewModel : ViewModel() {
                             fetchTransactions()
                         }
                     }
-                    .onFailure {
-                        _state.update {
-                            it.copy(crash = it.crash.copy(
-                                crashed = true,
-                                won = false,
-                                payout = 0,
-                            ))
+                    .onFailure { e ->
+                        // Only treat as crashed if it's a 404 (no active game)
+                        if (e is CasinoApiException && e.code == 404) {
+                            _state.update {
+                                it.copy(crash = it.crash.copy(
+                                    crashed = true,
+                                    won = false,
+                                    payout = 0,
+                                ))
+                            }
                         }
+                        // Otherwise keep polling (transient network error)
                     }
             }
         }
