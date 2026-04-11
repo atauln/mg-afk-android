@@ -7,6 +7,7 @@ import com.mgafk.app.data.repository.CasinoApi
 import com.mgafk.app.data.repository.CasinoApiException
 import com.mgafk.app.data.repository.DepositConfigResponse
 import com.mgafk.app.data.repository.Transaction
+import java.time.Instant
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -200,6 +201,25 @@ class CasinoViewModel : ViewModel() {
                 delay(if (consecutiveErrors > 0) 5_000 else 3_000)
                 val dep = _state.value.deposit
                 if (!dep.active || dep.status != "pending") break
+
+                // Stop polling if local timer shows expiry passed (covers long network outage)
+                val expired = try { Instant.parse(dep.expiresAt).isBefore(Instant.now()) } catch (_: Exception) { false }
+                if (expired) {
+                    AppLog.d(TAG, "[Deposit] Local expiry reached, doing final status check")
+                    CasinoApi.getDepositStatus(apiKey)
+                        .onSuccess { info ->
+                            if (info != null) {
+                                _state.update { it.copy(deposit = it.deposit.copy(status = info.status, receivedAmount = info.receivedAmount, refundedAmount = info.refundedAmount)) }
+                                if (info.status == "confirmed") { fetchCasinoBalance(); fetchTransactions() }
+                            } else {
+                                _state.update { it.copy(deposit = it.deposit.copy(status = "expired")) }
+                            }
+                        }
+                        .onFailure {
+                            _state.update { it.copy(deposit = it.deposit.copy(status = "expired")) }
+                        }
+                    break
+                }
 
                 CasinoApi.getDepositStatus(apiKey)
                     .onSuccess { info ->
