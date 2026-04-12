@@ -37,6 +37,9 @@ data class Session(
     val chatMessages: List<ChatMessage> = emptyList(),
     val playersList: List<PlayerSnapshot> = emptyList(),
     val gameVersion: String = "",
+    val freePlantTiles: Int = 0,
+    val lastHatchedPet: InventoryPetItem? = null,
+    val lastHatchedEggId: String = "",
     val wsLogs: List<WsLog> = emptyList(),
 )
 
@@ -198,6 +201,7 @@ data class GardenPlantSnapshot(
     val species: String = "",
     val targetScale: Double = 0.0,
     val mutations: List<String> = emptyList(),
+    val startTime: Long = 0,
     val endTime: Long = 0,
 )
 

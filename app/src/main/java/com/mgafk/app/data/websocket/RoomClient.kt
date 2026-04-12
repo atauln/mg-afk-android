@@ -111,7 +111,7 @@ class RoomClient {
     private var lastShopsPayload: ClientEvent.ShopsChanged? = null
     private var lastGardenPayload: ClientEvent.GardenChanged? = null
     private var lastEggsPayload: ClientEvent.EggsChanged? = null
-    private var lastInventorySize: Int = -1
+    private var lastInventoryPayload: ClientEvent.InventoryChanged? = null
     private var lastAbilityTimestamp = 0L
     private var lastChatSize = -1
     private var lastPlayersPayload: ClientEvent.PlayersListChanged? = null
@@ -179,7 +179,7 @@ class RoomClient {
         this.lastShopsPayload = null
         this.lastGardenPayload = null
         this.lastEggsPayload = null
-        this.lastInventorySize = -1
+        this.lastInventoryPayload = null
         gameState.reset()
 
         lastConnectOpts = ConnectOptions(
@@ -676,12 +676,10 @@ class RoomClient {
 
     private fun emitInventory() {
         val me = gameState.getPlayer(playerId) ?: return
-        val items = me.inventory
-        val storages = me.storages
-        val total = items.size + storages.size
-        if (total == lastInventorySize) return
-        lastInventorySize = total
-        emit(ClientEvent.InventoryChanged(items, storages))
+        val payload = ClientEvent.InventoryChanged(me.inventory, me.storages)
+        if (payload == lastInventoryPayload) return
+        lastInventoryPayload = payload
+        emit(payload)
     }
 
     private fun emitEggs() {

@@ -19,17 +19,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +88,42 @@ private val RARITY_TIERS = listOf("Common", "Uncommon", "Rare", "Legendary", "My
 private val TILE_MIN_WIDTH = 76.dp
 private val TILE_SPACING = 6.dp
 
+/** Growth progress 0..100 based on startTime/endTime vs now. */
+private fun growthPercent(startTime: Long, endTime: Long): Int {
+    if (endTime <= startTime) return 100
+    val now = System.currentTimeMillis()
+    if (now >= endTime) return 100
+    return ((now - startTime).toDouble() / (endTime - startTime) * 100).toInt().coerceIn(0, 100)
+}
+
+/** Format remaining time as compact string (e.g. "2m 30s", "1h 5m"). */
+private fun formatTimeRemaining(endTime: Long): String {
+    val remaining = endTime - System.currentTimeMillis()
+    if (remaining <= 0) return ""
+    val totalSec = remaining / 1000
+    val hours = totalSec / 3600
+    val minutes = (totalSec % 3600) / 60
+    val seconds = totalSec % 60
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
+}
+
+/** A tick that increments every second to force recomposition of time-dependent UI. */
+@Composable
+private fun rememberSecondTick(): Long {
+    var tick by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            tick = System.currentTimeMillis()
+        }
+    }
+    return tick
+}
+
 private fun computeSizePercent(targetScale: Double, maxScale: Double): Double {
     if (maxScale <= 1.0) return if (targetScale >= 1.0) 100.0 else targetScale * 100.0
     return if (targetScale <= 1.0) {
@@ -100,18 +143,46 @@ private data class ResolvedPlant(
     val sellPrice: Long?,
 )
 
+/** A garden entry is either a single crop or a multi-slot plant grouping multiple crops. */
+private sealed class GardenEntry {
+    abstract val tileId: Int
+    abstract val rarity: String?
+    abstract val displayName: String
+    abstract val totalValue: Long
+
+    data class SingleCrop(val plant: ResolvedPlant) : GardenEntry() {
+        override val tileId get() = plant.snapshot.tileId
+        override val rarity get() = plant.rarity
+        override val displayName get() = plant.displayName
+        override val totalValue get() = plant.sellPrice ?: 0L
+    }
+
+    data class MultiSlotPlant(
+        override val tileId: Int,
+        override val rarity: String?,
+        override val displayName: String,
+        val cropSprite: String?,
+        val crops: List<ResolvedPlant>,
+    ) : GardenEntry() {
+        override val totalValue get() = crops.sumOf { it.sellPrice ?: 0L }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GardenCard(
     plants: List<GardenPlantSnapshot>,
     apiReady: Boolean = false,
     onHarvest: (slot: Int, slotIndex: Int) -> Unit = { _, _ -> },
+    onWater: (slot: Int) -> Unit = {},
+    wateringCans: Int = 0,
     showTip: Boolean = false,
     onDismissTip: () -> Unit = {},
 ) {
     var selectedRarity by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedMutation by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedPlant by remember { mutableStateOf<ResolvedPlant?>(null) }
+    var selectedCropKey by remember { mutableStateOf<Pair<Int, Int>?>(null) } // tileId to slotIndex
+    var selectedMultiPlantTileId by remember { mutableStateOf<Int?>(null) }
 
     // Pre-resolve all API lookups once when plants/apiReady change
     val resolved = remember(plants, apiReady) {
@@ -125,6 +196,25 @@ fun GardenCard(
                 displayName = entry?.name?.removeSuffix(" Seed") ?: plant.species,
                 sellPrice = PriceCalculator.calculateCropSellPrice(plant.species, plant.targetScale, plant.mutations),
             )
+        }
+    }
+
+    // Group into garden entries: single crops stay as-is, multi-slot get grouped
+    val entries = remember(resolved) {
+        val byTile = resolved.groupBy { it.snapshot.tileId }
+        byTile.map { (tileId, crops) ->
+            if (crops.size == 1) {
+                GardenEntry.SingleCrop(crops.first())
+            } else {
+                val first = crops.first()
+                GardenEntry.MultiSlotPlant(
+                    tileId = tileId,
+                    rarity = first.rarity,
+                    displayName = first.displayName,
+                    cropSprite = first.cropSprite,
+                    crops = crops.sortedBy { it.snapshot.slotIndex },
+                )
+            }
         }
     }
 
@@ -144,20 +234,40 @@ fun GardenCard(
     if (safeRarity != selectedRarity) selectedRarity = safeRarity
     if (safeMutation != selectedMutation) selectedMutation = safeMutation
 
-    // Fast filter — no API calls, just string comparisons on pre-resolved data
-    val filtered = remember(resolved, safeRarity, safeMutation) {
-        if (safeRarity == null && safeMutation == null) resolved
-        else resolved.filter { rp ->
-            (safeRarity == null || rp.rarity == safeRarity) &&
-                (safeMutation == null || safeMutation in rp.snapshot.mutations)
+    // Filter entries
+    val filtered = remember(entries, safeRarity, safeMutation) {
+        if (safeRarity == null && safeMutation == null) entries
+        else entries.filter { entry ->
+            when (entry) {
+                is GardenEntry.SingleCrop -> {
+                    (safeRarity == null || entry.rarity == safeRarity) &&
+                        (safeMutation == null || safeMutation in entry.plant.snapshot.mutations)
+                }
+                is GardenEntry.MultiSlotPlant -> {
+                    (safeRarity == null || entry.rarity == safeRarity) &&
+                        (safeMutation == null || entry.crops.any { safeMutation in it.snapshot.mutations })
+                }
+            }
         }
     }
 
     val totalValue = remember(filtered) {
-        filtered.sumOf { it.sellPrice ?: 0L }
+        filtered.sumOf { it.totalValue }
     }
 
-
+    // Count total individual crops for header
+    val totalCropCount = remember(entries) {
+        entries.sumOf { when (it) {
+            is GardenEntry.SingleCrop -> 1
+            is GardenEntry.MultiSlotPlant -> it.crops.size
+        } }
+    }
+    val filteredCropCount = remember(filtered) {
+        filtered.sumOf { when (it) {
+            is GardenEntry.SingleCrop -> 1
+            is GardenEntry.MultiSlotPlant -> it.crops.size
+        } }
+    }
 
     AppCard(
         title = "Plants",
@@ -174,7 +284,7 @@ fun GardenCard(
                 }
                 Text(
                     text = if (safeRarity != null || safeMutation != null)
-                        "${filtered.size}/${plants.size}" else "${plants.size} plants",
+                        "$filteredCropCount/$totalCropCount" else "$totalCropCount plants",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = Accent.copy(alpha = 0.7f),
@@ -276,17 +386,30 @@ fun GardenCard(
                     val rows = filtered.chunked(columns)
 
                     Column(verticalArrangement = Arrangement.spacedBy(TILE_SPACING)) {
-                        rows.forEach { rowPlants ->
+                        rows.forEach { rowEntries ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(TILE_SPACING),
                             ) {
-                                rowPlants.forEach { rp ->
-                                    Box(modifier = Modifier.weight(1f).clickable { selectedPlant = rp }) {
-                                        GardenPlantTile(rp)
+                                rowEntries.forEach { entry ->
+                                    when (entry) {
+                                        is GardenEntry.SingleCrop -> {
+                                            Box(modifier = Modifier.weight(1f).clickable {
+                                                selectedCropKey = entry.plant.snapshot.tileId to entry.plant.snapshot.slotIndex
+                                            }) {
+                                                GardenPlantTile(entry.plant)
+                                            }
+                                        }
+                                        is GardenEntry.MultiSlotPlant -> {
+                                            Box(modifier = Modifier.weight(1f).clickable {
+                                                selectedMultiPlantTileId = entry.tileId
+                                            }) {
+                                                MultiSlotPlantTile(entry)
+                                            }
+                                        }
                                     }
                                 }
-                                repeat(columns - rowPlants.size) {
+                                repeat(columns - rowEntries.size) {
                                     Box(modifier = Modifier.weight(1f))
                                 }
                             }
@@ -294,24 +417,46 @@ fun GardenCard(
                     }
                 }
             }
-
         }
     }
 
-    // Plant detail dialog
-    selectedPlant?.let { rp ->
-        PlantDetailDialog(
-            plant = rp,
-            onHarvest = {
-                onHarvest(rp.snapshot.tileId, rp.snapshot.slotIndex)
-                selectedPlant = null
-            },
-            onDismiss = { selectedPlant = null },
-        )
+    // Single crop detail dialog — look up live data so timestamps update in real-time
+    selectedCropKey?.let { (tileId, slotIndex) ->
+        val liveCrop = resolved.find { it.snapshot.tileId == tileId && it.snapshot.slotIndex == slotIndex }
+        if (liveCrop != null) {
+            PlantDetailDialog(
+                plant = liveCrop,
+                wateringCans = wateringCans,
+                onHarvest = {
+                    onHarvest(tileId, slotIndex)
+                    selectedCropKey = null
+                },
+                onWater = { onWater(tileId) },
+                onDismiss = { selectedCropKey = null },
+            )
+        } else {
+            selectedCropKey = null
+        }
+    }
+
+    // Multi-slot plant detail dialog — look up live data
+    selectedMultiPlantTileId?.let { tileId ->
+        val liveEntry = entries.firstOrNull { it.tileId == tileId } as? GardenEntry.MultiSlotPlant
+        if (liveEntry != null) {
+            MultiSlotPlantDetailDialog(
+                plant = liveEntry,
+                wateringCans = wateringCans,
+                onHarvest = { slot, slotIndex -> onHarvest(slot, slotIndex) },
+                onWater = { slot -> onWater(slot) },
+                onDismiss = { selectedMultiPlantTileId = null },
+            )
+        } else {
+            selectedMultiPlantTileId = null
+        }
     }
 }
 
-// ── Garden plant tile ──
+// ── Single crop tile (unchanged) ──
 
 @Composable
 private fun GardenPlantTile(rp: ResolvedPlant) {
@@ -356,6 +501,54 @@ private fun GardenPlantTile(rp: ResolvedPlant) {
 
         if (rp.snapshot.mutations.isNotEmpty()) {
             MutationIcons(mutations = rp.snapshot.mutations)
+        }
+    }
+}
+
+// ── Multi-slot plant tile (like inventory PlantTile) ──
+
+@Composable
+private fun MultiSlotPlantTile(entry: GardenEntry.MultiSlotPlant) {
+    val color = rarityColor(entry.rarity)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(if (entry.totalValue > 0) 0.85f else 1f)
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.5.dp, color.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+            .background(SurfaceDark)
+            .padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        SpriteImage(url = entry.cropSprite, size = 28.dp, contentDescription = entry.displayName)
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            entry.displayName,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            lineHeight = 10.sp,
+        )
+        Text(
+            "${entry.crops.size} slots",
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            color = Accent,
+            lineHeight = 11.sp,
+        )
+        if (entry.totalValue > 0) {
+            Text(
+                PriceCalculator.formatPrice(entry.totalValue),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFFFD700),
+                lineHeight = 10.sp,
+            )
         }
     }
 }
@@ -415,12 +608,14 @@ private fun MutationIcons(mutations: List<String>) {
     }
 }
 
-// ── Plant detail dialog ──
+// ── Single crop detail dialog ──
 
 @Composable
 private fun PlantDetailDialog(
     plant: ResolvedPlant,
+    wateringCans: Int,
     onHarvest: () -> Unit,
+    onWater: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val color = rarityColor(plant.rarity)
@@ -518,22 +713,283 @@ private fun PlantDetailDialog(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Harvest button (only enabled when endTime has passed)
-            val isMature = plant.snapshot.endTime > 0 && System.currentTimeMillis() >= plant.snapshot.endTime
+            // Tick every second for live countdown
+            val now = rememberSecondTick()
+            val isMature = plant.snapshot.endTime > 0 && now >= plant.snapshot.endTime
+            val canWater = !isMature && wateringCans > 0
+
+            // Remaining time info (shown above buttons when growing)
+            if (!isMature) {
+                val remaining = formatTimeRemaining(plant.snapshot.endTime)
+                if (remaining.isNotEmpty()) {
+                    Text(
+                        remaining,
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Water button
+                Button(
+                    onClick = onWater,
+                    enabled = canWater,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF3B82F6),
+                        disabledContainerColor = Color(0xFF3B82F6).copy(alpha = 0.2f),
+                        disabledContentColor = Color.White.copy(alpha = 0.4f),
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Text(
+                        if (!isMature && wateringCans > 0) "Water ($wateringCans)"
+                        else if (isMature) "Mature"
+                        else "No cans",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (canWater) Color.White else Color.White.copy(alpha = 0.4f),
+                    )
+                }
+
+                // Harvest button
+                Button(
+                    onClick = onHarvest,
+                    enabled = isMature,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = StatusConnected,
+                        disabledContainerColor = StatusConnected.copy(alpha = 0.2f),
+                        disabledContentColor = Color.White.copy(alpha = 0.4f),
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Text(
+                        if (isMature) "Harvest" else "Growing…",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isMature) Color.White else Color.White.copy(alpha = 0.4f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Multi-slot plant detail dialog ──
+
+@Composable
+private fun MultiSlotPlantDetailDialog(
+    plant: GardenEntry.MultiSlotPlant,
+    wateringCans: Int,
+    onHarvest: (slot: Int, slotIndex: Int) -> Unit,
+    onWater: (slot: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val color = rarityColor(plant.rarity)
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(SurfaceCard)
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Header
+            SpriteImage(url = plant.cropSprite, size = 56.dp, contentDescription = plant.displayName)
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                plant.displayName,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+            )
+
+            if (plant.rarity != null) {
+                Text(
+                    plant.rarity,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = color,
+                )
+            }
+
+            Row(
+                modifier = Modifier.padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Tile #${plant.tileId}",
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                )
+                Text(
+                    "${plant.crops.size} slots",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Accent,
+                )
+                if (plant.totalValue > 0) {
+                    Text(
+                        PriceCalculator.formatPrice(plant.totalValue),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFFD700),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Tick every second for live countdown
+            val now = rememberSecondTick()
+
+            // Scrollable crop list
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                plant.crops.forEachIndexed { index, crop ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            color = SurfaceBorder.copy(alpha = 0.4f),
+                            thickness = 0.5.dp,
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        )
+                    }
+                    CropSlotRow(
+                        crop = crop,
+                        slotLabel = "Slot ${crop.snapshot.slotIndex + 1}",
+                        color = color,
+                        wateringCans = wateringCans,
+                        now = now,
+                        onHarvest = { onHarvest(crop.snapshot.tileId, crop.snapshot.slotIndex) },
+                        onWater = { onWater(crop.snapshot.tileId) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Individual crop row inside multi-slot dialog ──
+
+@Composable
+private fun CropSlotRow(
+    crop: ResolvedPlant,
+    slotLabel: String,
+    color: Color,
+    wateringCans: Int,
+    now: Long,
+    onHarvest: () -> Unit,
+    onWater: () -> Unit,
+) {
+    val sizePercent = computeSizePercent(crop.snapshot.targetScale, crop.maxScale)
+    val isMature = crop.snapshot.endTime > 0 && now >= crop.snapshot.endTime
+    val canWater = !isMature && wateringCans > 0
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        // Slot label + mutations + remaining time
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(slotLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!isMature) {
+                    val remaining = formatTimeRemaining(crop.snapshot.endTime)
+                    if (remaining.isNotEmpty()) {
+                        Text(remaining, fontSize = 9.sp, color = TextSecondary)
+                    }
+                }
+                if (crop.snapshot.mutations.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        sortMutations(crop.snapshot.mutations).forEach { mutation ->
+                            SpriteImage(url = mutationSpriteUrl(mutation), size = 14.dp, contentDescription = mutation)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Size bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("${sizePercent.toInt()}%", fontSize = 10.sp, color = TextSecondary, modifier = Modifier.width(28.dp))
+            Box(modifier = Modifier.weight(1f)) {
+                SizeBar(percent = sizePercent, color = color, showLabel = false)
+            }
+            if (crop.sellPrice != null) {
+                Text(
+                    PriceCalculator.formatPrice(crop.sellPrice),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFFD700),
+                )
+            }
+        }
+
+        // Action buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Button(
+                onClick = onWater,
+                enabled = canWater,
+                modifier = Modifier.weight(1f).height(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF3B82F6),
+                    disabledContainerColor = Color(0xFF3B82F6).copy(alpha = 0.2f),
+                    disabledContentColor = Color.White.copy(alpha = 0.4f),
+                ),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+            ) {
+                Text(
+                    if (canWater) "Water" else if (isMature) "Mature" else "No cans",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (canWater) Color.White else Color.White.copy(alpha = 0.4f),
+                )
+            }
             Button(
                 onClick = onHarvest,
                 enabled = isMature,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.weight(1f).height(32.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = StatusConnected,
                     disabledContainerColor = StatusConnected.copy(alpha = 0.2f),
                     disabledContentColor = Color.White.copy(alpha = 0.4f),
                 ),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
             ) {
                 Text(
                     if (isMature) "Harvest" else "Growing…",
-                    fontSize = 14.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isMature) Color.White else Color.White.copy(alpha = 0.4f),
                 )

@@ -1,5 +1,8 @@
 package com.mgafk.app.ui.screens.storage
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +25,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,11 +58,13 @@ import com.mgafk.app.ui.theme.Accent
 import com.mgafk.app.ui.theme.SurfaceBorder
 import com.mgafk.app.ui.theme.SurfaceCard
 import com.mgafk.app.ui.theme.SurfaceDark
+import com.mgafk.app.ui.theme.StatusConnected
 import com.mgafk.app.ui.theme.TextMuted
 import com.mgafk.app.ui.theme.TextPrimary
 import com.mgafk.app.ui.theme.TextSecondary
 import com.mgafk.app.ui.components.mutationSpriteUrl
 import com.mgafk.app.ui.components.sortMutations
+import androidx.compose.ui.window.Dialog
 
 // ── Rarity colors ──
 
@@ -134,9 +141,20 @@ private fun fmtQty(q: Int): String = when {
 // ── Main ──
 
 @Composable
-fun InventoryCard(inventory: InventorySnapshot, apiReady: Boolean = false) {
+fun InventoryCard(
+    inventory: InventorySnapshot,
+    apiReady: Boolean = false,
+    freePlantTiles: Int = 0,
+    onPlantSeed: (species: String) -> Unit = {},
+    onGrowEgg: (eggId: String) -> Unit = {},
+    showSeedTip: Boolean = false,
+    onDismissSeedTip: () -> Unit = {},
+) {
     val totalItems = inventory.seeds.size + inventory.eggs.size + inventory.produce.size +
         inventory.plants.size + inventory.pets.size + inventory.tools.size + inventory.decors.size
+
+    var selectedSeedSpecies by remember { mutableStateOf<String?>(null) }
+    var selectedEggId by remember { mutableStateOf<String?>(null) }
 
     AppCard(title = "Inventory", collapsible = true, persistKey = "storage.inventory", trailing = {
         Text("$totalItems types", fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Accent.copy(0.7f))
@@ -154,13 +172,39 @@ fun InventoryCard(inventory: InventorySnapshot, apiReady: Boolean = false) {
 
             Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
                 if (sortedSeeds.isNotEmpty()) SubSection("Seeds", sortedSeeds.size) {
-                    GridOf(sortedSeeds.size) { i -> QuantityTile(sortedSeeds[i].species, sortedSeeds[i].quantity, apiReady) }
+                    // First-time tip
+                    AnimatedVisibility(visible = showSeedTip, enter = fadeIn(), exit = fadeOut()) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Accent.copy(alpha = 0.1f))
+                                .border(1.dp, Accent.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                                .clickable { onDismissSeedTip() }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Tap a seed to view details and plant it.",
+                                    fontSize = 11.sp, color = Accent, lineHeight = 15.sp, modifier = Modifier.weight(1f))
+                                Text("OK", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Accent,
+                                    modifier = Modifier.clickable { onDismissSeedTip() })
+                            }
+                        }
+                    }
+                    GridOf(sortedSeeds.size) { i ->
+                        Box(modifier = Modifier.clickable { selectedSeedSpecies = sortedSeeds[i].species }) {
+                            QuantityTile(sortedSeeds[i].species, sortedSeeds[i].quantity, apiReady)
+                        }
+                    }
                 }
                 if (sortedTools.isNotEmpty()) SubSection("Tools", sortedTools.size) {
                     GridOf(sortedTools.size) { i -> QuantityTile(sortedTools[i].toolId, sortedTools[i].quantity, apiReady) }
                 }
                 if (sortedEggs.isNotEmpty()) SubSection("Eggs", sortedEggs.size) {
-                    GridOf(sortedEggs.size) { i -> QuantityTile(sortedEggs[i].eggId, sortedEggs[i].quantity, apiReady) }
+                    GridOf(sortedEggs.size) { i ->
+                        Box(modifier = Modifier.clickable { selectedEggId = sortedEggs[i].eggId }) {
+                            QuantityTile(sortedEggs[i].eggId, sortedEggs[i].quantity, apiReady)
+                        }
+                    }
                 }
                 if (sortedPlants.isNotEmpty()) {
                     val totalPlantsValue = remember(sortedPlants) { sortedPlants.sumOf { it.totalPrice } }
@@ -185,6 +229,39 @@ fun InventoryCard(inventory: InventorySnapshot, apiReady: Boolean = false) {
                     PetsList(sortedPets, apiReady)
                 }
             }
+        }
+    }
+
+    // Seed detail dialog — look up live data from inventory so quantity updates in real-time
+    selectedSeedSpecies?.let { species ->
+        val liveSeed = inventory.seeds.find { it.species == species }
+        if (liveSeed != null) {
+            SeedDetailDialog(
+                seed = liveSeed,
+                apiReady = apiReady,
+                freePlantTiles = freePlantTiles,
+                onPlantSeed = { onPlantSeed(species) },
+                onDismiss = { selectedSeedSpecies = null },
+            )
+        } else {
+            // Seed was fully consumed — close dialog
+            selectedSeedSpecies = null
+        }
+    }
+
+    // Egg detail dialog — live lookup
+    selectedEggId?.let { eggId ->
+        val liveEgg = inventory.eggs.find { it.eggId == eggId }
+        if (liveEgg != null) {
+            EggGrowDialog(
+                egg = liveEgg,
+                apiReady = apiReady,
+                freePlantTiles = freePlantTiles,
+                onGrowEgg = { onGrowEgg(eggId) },
+                onDismiss = { selectedEggId = null },
+            )
+        } else {
+            selectedEggId = null
         }
     }
 }
@@ -434,6 +511,198 @@ private fun abilityColor(abilityId: String): Color {
         id.startsWith("dawnlitgranter") -> Color(0xFFC47CB4)
         id.startsWith("amberlitgranter") -> Color(0xFFCC9060)
         else -> Color(0xFF646464)
+    }
+}
+
+// ── Egg grow dialog ──
+
+@Composable
+private fun EggGrowDialog(
+    egg: InventoryEggItem,
+    apiReady: Boolean,
+    freePlantTiles: Int,
+    onGrowEgg: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val entry = remember(egg.eggId, apiReady) { MgApi.findItem(egg.eggId) }
+    val name = entry?.name ?: egg.eggId
+    val color = rarityColor(entry?.rarity)
+    val canGrow = freePlantTiles > 0
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(SurfaceCard)
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            SpriteImage(url = entry?.sprite, size = 56.dp, contentDescription = name)
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(name, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+
+            if (entry?.rarity != null) {
+                Text(entry.rarity, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = color)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Quantity", fontSize = 12.sp, color = TextSecondary)
+                    Text(fmtQty(egg.quantity), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Free tiles", fontSize = 12.sp, color = TextSecondary)
+                    Text(
+                        "$freePlantTiles",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (canGrow) StatusConnected else Color(0xFFEF4444),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = onGrowEgg,
+                enabled = canGrow,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF8B5CF6),
+                    disabledContainerColor = Color(0xFF8B5CF6).copy(alpha = 0.2f),
+                    disabledContentColor = Color.White.copy(alpha = 0.4f),
+                ),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text(
+                    if (canGrow) "Grow Egg" else "No free tiles",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (canGrow) Color.White else Color.White.copy(alpha = 0.4f),
+                )
+            }
+        }
+    }
+}
+
+// ── Seed detail dialog ──
+
+@Composable
+private fun SeedDetailDialog(
+    seed: InventorySeedItem,
+    apiReady: Boolean,
+    freePlantTiles: Int,
+    onPlantSeed: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val entry = remember(seed.species, apiReady) { MgApi.findItem(seed.species) }
+    val name = entry?.name ?: seed.species
+    val color = rarityColor(entry?.rarity)
+    val canPlant = freePlantTiles > 0
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(SurfaceCard)
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // Sprite
+            SpriteImage(url = entry?.sprite, size = 56.dp, contentDescription = name)
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Name
+            Text(
+                name,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+            )
+
+            // Rarity
+            if (entry?.rarity != null) {
+                Text(
+                    entry.rarity,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = color,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Details
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // Quantity
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Quantity", fontSize = 12.sp, color = TextSecondary)
+                    Text(
+                        fmtQty(seed.quantity),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary,
+                    )
+                }
+
+                // Free tiles
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Free tiles", fontSize = 12.sp, color = TextSecondary)
+                    Text(
+                        "$freePlantTiles",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (canPlant) StatusConnected else Color(0xFFEF4444),
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Plant seed button
+            Button(
+                onClick = onPlantSeed,
+                enabled = canPlant,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = StatusConnected,
+                    disabledContainerColor = StatusConnected.copy(alpha = 0.2f),
+                    disabledContentColor = Color.White.copy(alpha = 0.4f),
+                ),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text(
+                    if (canPlant) "Plant Seed" else "No free tiles",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (canPlant) Color.White else Color.White.copy(alpha = 0.4f),
+                )
+            }
+        }
     }
 }
 

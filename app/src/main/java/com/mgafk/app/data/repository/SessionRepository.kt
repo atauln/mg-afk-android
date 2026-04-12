@@ -33,6 +33,8 @@ class SessionRepository(private val context: Context) {
         private val KEY_PET_TEAMS = stringPreferencesKey("mgafk.petTeams")
         private val KEY_TEAM_TIP = booleanPreferencesKey("mgafk.teamTipDismissed")
         private val KEY_GARDEN_TIP = booleanPreferencesKey("mgafk.gardenTipDismissed")
+        private val KEY_SEED_TIP = booleanPreferencesKey("mgafk.seedTipDismissed")
+        private val KEY_EGG_TIP = booleanPreferencesKey("mgafk.eggTipDismissed")
         private val KEY_NOTIFIED_VERSION = stringPreferencesKey("mgafk.lastNotifiedVersion")
     }
 
@@ -166,6 +168,26 @@ class SessionRepository(private val context: Context) {
     suspend fun dismissGardenTip() {
         context.dataStore.edit { prefs ->
             prefs[KEY_GARDEN_TIP] = true
+        }
+    }
+
+    suspend fun isSeedTipDismissed(): Boolean {
+        return context.dataStore.data.map { it[KEY_SEED_TIP] ?: false }.first()
+    }
+
+    suspend fun dismissSeedTip() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_SEED_TIP] = true
+        }
+    }
+
+    suspend fun isEggTipDismissed(): Boolean {
+        return context.dataStore.data.map { it[KEY_EGG_TIP] ?: false }.first()
+    }
+
+    suspend fun dismissEggTip() {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_EGG_TIP] = true
         }
     }
 

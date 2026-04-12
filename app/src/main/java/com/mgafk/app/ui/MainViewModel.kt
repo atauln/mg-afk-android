@@ -85,6 +85,8 @@ data class UiState(
     val showPetTip: Boolean = false,
     val showTeamTip: Boolean = false,
     val showGardenTip: Boolean = false,
+    val showSeedTip: Boolean = false,
+    val showEggTip: Boolean = false,
     val petTeams: List<PetTeam> = emptyList(),
     val settings: AppSettings = AppSettings(),
     val serviceLogs: List<AfkService.ServiceLog> = emptyList(),
@@ -133,6 +135,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val petTeams = repo.loadPetTeams()
             val teamTipDismissed = repo.isTeamTipDismissed()
             val gardenTipDismissed = repo.isGardenTipDismissed()
+            val seedTipDismissed = repo.isSeedTipDismissed()
+            val eggTipDismissed = repo.isEggTipDismissed()
             _state.value = UiState(
                 sessions = sessions,
                 activeSessionId = activeId,
@@ -143,6 +147,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 showPetTip = !petTipDismissed,
                 showTeamTip = !teamTipDismissed,
                 showGardenTip = !gardenTipDismissed,
+                showSeedTip = !seedTipDismissed,
+                showEggTip = !eggTipDismissed,
                 petTeams = petTeams,
                 settings = settings,
             )
@@ -371,6 +377,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissGardenTip() {
         _state.update { it.copy(showGardenTip = false) }
         viewModelScope.launch { repo.dismissGardenTip() }
+    }
+
+    fun dismissSeedTip() {
+        _state.update { it.copy(showSeedTip = false) }
+        viewModelScope.launch { repo.dismissSeedTip() }
+    }
+
+    fun dismissEggTip() {
+        _state.update { it.copy(showEggTip = false) }
+        viewModelScope.launch { repo.dismissEggTip() }
     }
 
     // ---- Currency balance ----
@@ -807,6 +823,205 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clients[sessionId]?.actions?.harvestCrop(slot = slot, slotsIndex = slotIndex)
     }
 
+    private val pendingWaterJobs = mutableMapOf<String, Job>()
+
+    /** Water a plant with optimistic update (decrements WateringCan count). */
+    fun waterPlant(sessionId: String, slot: Int) {
+        val actions = clients[sessionId]?.actions ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+        val canCount = session.inventory.tools.find { it.toolId == "WateringCan" }?.quantity ?: 0
+        if (canCount <= 0) return
+
+        // OPTIMISTIC: decrement watering can quantity + reduce endTime by 5min on the tile
+        val previousInventory = session.inventory
+        val previousGarden = session.garden
+        val waterReduceMs = 5 * 60 * 1000L // 5 minutes
+        updateSession(sessionId) { s ->
+            s.copy(
+                inventory = s.inventory.copy(
+                    tools = s.inventory.tools.mapNotNull { tool ->
+                        if (tool.toolId == "WateringCan") {
+                            if (tool.quantity > 1) tool.copy(quantity = tool.quantity - 1) else null
+                        } else tool
+                    }
+                ),
+                garden = s.garden.map { plant ->
+                    if (plant.tileId == slot) {
+                        plant.copy(endTime = (plant.endTime - waterReduceMs).coerceAtLeast(plant.startTime))
+                    } else plant
+                },
+            )
+        }
+
+        actions.waterPlant(slot = slot)
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:water:$slot"
+        pendingWaterJobs[key]?.cancel()
+        pendingWaterJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s -> s.copy(inventory = previousInventory, garden = previousGarden) }
+            pendingWaterJobs.remove(key)
+        }
+    }
+
+    // Track pet IDs before hatch to detect the new pet in InventoryChanged
+    private val preHatchPetIds = mutableMapOf<String, Set<String>>() // sessionId -> pet IDs before hatch
+    private val pendingHatchJobs = mutableMapOf<String, Job>()
+
+    /** Hatch a mature egg, optimistically remove it from garden eggs. */
+    fun hatchEgg(sessionId: String, slot: Int) {
+        val actions = clients[sessionId]?.actions ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+
+        // Save current pet IDs to detect the new one later
+        val currentPetIds = (session.inventory.pets.map { it.id } + session.petHutch.map { it.id }).toSet()
+        preHatchPetIds[sessionId] = currentPetIds
+
+        // Save egg ID for the hatch animation
+        val eggId = session.gardenEggs.find { it.tileId == slot }?.eggId.orEmpty()
+
+        // OPTIMISTIC: remove egg from gardenEggs, store eggId for animation
+        val previousEggs = session.gardenEggs
+        updateSession(sessionId) { s ->
+            s.copy(
+                gardenEggs = s.gardenEggs.filter { it.tileId != slot },
+                lastHatchedEggId = eggId,
+            )
+        }
+
+        actions.hatchEgg(slot = slot)
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:hatch:$slot"
+        pendingHatchJobs[key]?.cancel()
+        pendingHatchJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s -> s.copy(gardenEggs = previousEggs) }
+            pendingHatchJobs.remove(key)
+            preHatchPetIds.remove(sessionId)
+        }
+    }
+
+    private val pendingGrowEggJobs = mutableMapOf<String, Job>()
+
+    /** Grow an egg on the first available dirt tile with optimistic update. */
+    fun growEgg(sessionId: String, eggId: String) {
+        val client = clients[sessionId] ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+        val freeSlot = findFirstFreePlantTile(client)
+        if (freeSlot == null) {
+            AppLog.w(TAG, "[GrowEgg] No free tile available")
+            return
+        }
+        AppLog.d(TAG, "[GrowEgg] Growing $eggId on tile $freeSlot")
+
+        // OPTIMISTIC: decrement egg quantity + decrement free tiles
+        val previousInventory = session.inventory
+        val previousFreeTiles = session.freePlantTiles
+        updateSession(sessionId) { s ->
+            s.copy(
+                inventory = s.inventory.copy(
+                    eggs = s.inventory.eggs.mapNotNull { egg ->
+                        if (egg.eggId == eggId) {
+                            if (egg.quantity > 1) egg.copy(quantity = egg.quantity - 1) else null
+                        } else egg
+                    }
+                ),
+                freePlantTiles = (s.freePlantTiles - 1).coerceAtLeast(0),
+            )
+        }
+
+        client.actions.growEgg(slot = freeSlot, eggId = eggId)
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:growEgg:$eggId:$freeSlot"
+        pendingGrowEggJobs[key]?.cancel()
+        pendingGrowEggJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s ->
+                s.copy(inventory = previousInventory, freePlantTiles = previousFreeTiles)
+            }
+            pendingGrowEggJobs.remove(key)
+        }
+    }
+
+    /** Clear the last hatched pet result (called from UI after showing the popup). */
+    fun clearHatchedPet(sessionId: String) {
+        updateSession(sessionId) { it.copy(lastHatchedPet = null, lastHatchedEggId = "") }
+    }
+
+    private val pendingPlantJobs = mutableMapOf<String, Job>()
+
+    /** Plant a seed on the first available dirt tile with optimistic update. */
+    fun plantSeed(sessionId: String, species: String) {
+        val client = clients[sessionId] ?: return
+        val session = _state.value.sessions.find { it.id == sessionId } ?: return
+        val freeSlot = findFirstFreePlantTile(client)
+        if (freeSlot == null) {
+            AppLog.w(TAG, "[PlantSeed] No free tile available")
+            return
+        }
+        AppLog.d(TAG, "[PlantSeed] Planting $species on tile $freeSlot")
+
+        // OPTIMISTIC: decrement seed quantity + decrement free tiles
+        val previousInventory = session.inventory
+        val previousFreeTiles = session.freePlantTiles
+        updateSession(sessionId) { s ->
+            s.copy(
+                inventory = s.inventory.copy(
+                    seeds = s.inventory.seeds.mapNotNull { seed ->
+                        if (seed.species == species) {
+                            if (seed.quantity > 1) seed.copy(quantity = seed.quantity - 1) else null
+                        } else seed
+                    }
+                ),
+                freePlantTiles = (s.freePlantTiles - 1).coerceAtLeast(0),
+            )
+        }
+
+        // Send to server
+        client.actions.plantSeed(slot = freeSlot, species = species)
+
+        // Rollback after 5s if server hasn't confirmed
+        val key = "$sessionId:plant:$species:$freeSlot"
+        pendingPlantJobs[key]?.cancel()
+        pendingPlantJobs[key] = viewModelScope.launch {
+            delay(5000)
+            updateSession(sessionId) { s ->
+                s.copy(inventory = previousInventory, freePlantTiles = previousFreeTiles)
+            }
+            pendingPlantJobs.remove(key)
+        }
+    }
+
+    /**
+     * Compute the number of free garden tiles by finding gaps in tileObjects keys.
+     * Keys in tileObjects are the occupied tile indices (0..maxKey).
+     * Free tiles = indices in 0..maxKey that are NOT in tileObjects.
+     */
+    private fun computeFreePlantTileCount(client: RoomClient): Int {
+        val me = client.gameState.getPlayer(client.playerId) ?: return 0
+        val tiles = me.getGardenTiles() ?: return 0
+        val occupiedKeys = tiles.keys.mapNotNull { it.toIntOrNull() }.toSet()
+        if (occupiedKeys.isEmpty()) return 0
+        val maxKey = occupiedKeys.max()
+        return (maxKey + 1) - occupiedKeys.size
+    }
+
+    /** Find the first tile index not occupied by a garden object. */
+    private fun findFirstFreePlantTile(client: RoomClient): Int? {
+        val me = client.gameState.getPlayer(client.playerId) ?: return null
+        val tiles = me.getGardenTiles() ?: return null
+        val occupiedKeys = tiles.keys.mapNotNull { it.toIntOrNull() }.toSet()
+        if (occupiedKeys.isEmpty()) return null
+        val maxKey = occupiedKeys.max()
+        for (i in 0..maxKey) {
+            if (i !in occupiedKeys) return i
+        }
+        return null
+    }
+
     // ---- Pet Teams ----
 
     private fun persistPetTeams() {
@@ -1138,11 +1353,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             species = species,
                             targetScale = slot["targetScale"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
                             mutations = mutations,
+                            startTime = slot["startTime"]?.jsonPrimitive?.longOrNull ?: 0L,
                             endTime = slot["endTime"]?.jsonPrimitive?.longOrNull ?: 0L,
                         )
                     }
                 }
-                updateSession(sessionId) { it.copy(garden = newGarden) }
+                // Server confirmed garden change — cancel pending plant/water rollbacks
+                pendingPlantJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingPlantJobs.remove(key)?.cancel()
+                }
+                pendingWaterJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingWaterJobs.remove(key)?.cancel()
+                }
+                val freeTiles = clients[sessionId]?.let { computeFreePlantTileCount(it) } ?: 0
+                updateSession(sessionId) { it.copy(garden = newGarden, freePlantTiles = freeTiles) }
             }
             is ClientEvent.InventoryChanged -> {
                 val seeds = mutableListOf<InventorySeedItem>()
@@ -1264,6 +1488,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pendingTroughJobs.clear()
                 pendingFeedJobs.values.forEach { it.cancel() }
                 pendingFeedJobs.clear()
+                pendingPlantJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingPlantJobs.remove(key)?.cancel()
+                }
+                pendingWaterJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingWaterJobs.remove(key)?.cancel()
+                }
+                pendingHatchJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingHatchJobs.remove(key)?.cancel()
+                }
+                pendingGrowEggJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingGrowEggJobs.remove(key)?.cancel()
+                }
+
+                // Detect newly hatched pet
+                val previousPetIds = preHatchPetIds.remove(sessionId)
+                val allNewPets = pets + hutchPets
+                val hatchedPet = if (previousPetIds != null) {
+                    allNewPets.firstOrNull { it.id !in previousPetIds }
+                } else null
 
                 updateSession(sessionId) {
                     it.copy(
@@ -1272,6 +1515,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         decorShed = shedDecors,
                         petHutch = hutchPets,
                         feedingTrough = troughCrops,
+                        lastHatchedPet = hatchedPet ?: it.lastHatchedPet,
                     )
                 }
                 alertNotifier.checkFeedingTrough(troughCrops, _state.value.alerts)
@@ -1286,7 +1530,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         maturedAt = data["maturedAt"]?.jsonPrimitive?.longOrNull ?: 0L,
                     )
                 }
-                updateSession(sessionId) { it.copy(gardenEggs = newEggs) }
+                // Server confirmed egg change — cancel pending hatch/grow rollbacks
+                pendingHatchJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingHatchJobs.remove(key)?.cancel()
+                }
+                pendingGrowEggJobs.keys.filter { it.startsWith("$sessionId:") }.forEach { key ->
+                    pendingGrowEggJobs.remove(key)?.cancel()
+                }
+                val freeTiles = clients[sessionId]?.let { computeFreePlantTileCount(it) } ?: 0
+                updateSession(sessionId) { it.copy(gardenEggs = newEggs, freePlantTiles = freeTiles) }
             }
             is ClientEvent.ShopsChanged -> {
                 val previousShops = _state.value.sessions.find { it.id == sessionId }?.shops.orEmpty()

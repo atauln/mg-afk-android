@@ -581,10 +581,21 @@ private fun SectionContent(
                 plants = session.garden,
                 apiReady = state.apiReady,
                 onHarvest = { slot, slotIndex -> viewModel.harvestCrop(session.id, slot, slotIndex) },
+                onWater = { slot -> viewModel.waterPlant(session.id, slot) },
+                wateringCans = session.inventory.tools.find { it.toolId == "WateringCan" }?.quantity ?: 0,
                 showTip = state.showGardenTip,
                 onDismissTip = { viewModel.dismissGardenTip() },
             )
-            EggsCard(eggs = session.gardenEggs, apiReady = state.apiReady)
+            EggsCard(
+                eggs = session.gardenEggs,
+                apiReady = state.apiReady,
+                onHatch = { slot -> viewModel.hatchEgg(session.id, slot) },
+                lastHatchedPet = session.lastHatchedPet,
+                lastHatchedEggId = session.lastHatchedEggId,
+                onDismissHatchedPet = { viewModel.clearHatchedPet(session.id) },
+                showTip = state.showEggTip,
+                onDismissTip = { viewModel.dismissEggTip() },
+            )
         }
         NavSection.PETS -> {
             ActivePetsCard(
@@ -640,7 +651,15 @@ private fun SectionContent(
             )
         }
         NavSection.STORAGE -> {
-            InventoryCard(inventory = session.inventory, apiReady = state.apiReady)
+            InventoryCard(
+                inventory = session.inventory,
+                apiReady = state.apiReady,
+                freePlantTiles = session.freePlantTiles,
+                onPlantSeed = { species -> viewModel.plantSeed(session.id, species) },
+                onGrowEgg = { eggId -> viewModel.growEgg(session.id, eggId) },
+                showSeedTip = state.showSeedTip,
+                onDismissSeedTip = { viewModel.dismissSeedTip() },
+            )
             SeedSiloCard(seeds = session.seedSilo, apiReady = state.apiReady)
             DecorShedCard(decors = session.decorShed, apiReady = state.apiReady)
             PetHutchCard(pets = session.petHutch, apiReady = state.apiReady)
