@@ -436,6 +436,22 @@ class CasinoViewModel : ViewModel() {
                 delay(if (consecutiveErrors > 2) 2_000 else 500)
                 val current = _state.value.crash
                 if (!current.active || current.crashed || current.cashedOut) break
+
+                // Safety: if polling has failed 30+ times in a row (~60s of errors),
+                // force-end the game to prevent infinite multiplier
+                if (consecutiveErrors >= 30) {
+                    AppLog.e(TAG, "[Crash] Too many consecutive errors ($consecutiveErrors), forcing game end")
+                    _state.update {
+                        it.copy(crash = it.crash.copy(
+                            crashed = true,
+                            won = false,
+                            payout = 0,
+                            error = "Connection lost — game ended",
+                        ))
+                    }
+                    break
+                }
+
                 CasinoApi.getCrashStatus(apiKey)
                     .onSuccess { resp ->
                         consecutiveErrors = 0
@@ -507,7 +523,23 @@ class CasinoViewModel : ViewModel() {
                     fetchTransactions()
                 }
                 .onFailure { e ->
-                    _state.update { it.copy(crash = it.crash.copy(loading = false, error = e.message)) }
+                    // If cashout fails with 404/400, the game is already over server-side
+                    val forceEnd = e is CasinoApiException && e.code in listOf(400, 404)
+                    if (forceEnd) {
+                        _state.update {
+                            it.copy(crash = it.crash.copy(
+                                loading = false,
+                                crashed = true,
+                                won = false,
+                                payout = 0,
+                                error = "Cashout failed: ${e.message}",
+                            ))
+                        }
+                    } else {
+                        // Network error — keep game alive so user can retry cashout
+                        _state.update { it.copy(crash = it.crash.copy(loading = false, error = e.message)) }
+                        startCrashPolling() // Restart polling since we cancelled it
+                    }
                 }
         }
     }
