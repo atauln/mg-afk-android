@@ -16,6 +16,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
+import com.mgafk.app.MainActivity
 import com.mgafk.app.MgAfkApp
 import com.mgafk.app.data.model.AlertConfig
 import com.mgafk.app.data.model.AlertMode
@@ -169,6 +170,7 @@ class AlertNotifier(private val context: Context) {
             .setContentText(body)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setAutoCancel(true)
+            .setContentIntent(mainActivityIntent())
         manager.notify(DISCONNECT_NOTIFICATION_ID + sessionName.hashCode(), builder.build())
     }
 
@@ -244,6 +246,7 @@ class AlertNotifier(private val context: Context) {
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setAutoCancel(true)
                 .setStyle(style)
+                .setContentIntent(mainActivityIntent())
 
             if (bitmap != null) {
                 builder.setLargeIcon(bitmap)
@@ -327,6 +330,14 @@ class AlertNotifier(private val context: Context) {
     }
 
     // ── Helpers ──
+
+    private fun mainActivityIntent(): PendingIntent = PendingIntent.getActivity(
+        context, 0,
+        Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        },
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     private fun resolveShopEntry(type: String, itemId: String): MgApi.GameEntry? {
         val map = when (type) {

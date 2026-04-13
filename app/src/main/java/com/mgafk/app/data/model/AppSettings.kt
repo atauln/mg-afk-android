@@ -26,7 +26,7 @@ enum class PurchaseMode {
 data class AppSettings(
     // Background & Battery
     val wifiLockEnabled: Boolean = true,
-    val wakeLockMode: WakeLockMode = WakeLockMode.SMART,
+    val wakeLockMode: WakeLockMode = WakeLockMode.ALWAYS,
     val wakeLockAutoDelayMin: Int = 5,
 
     // Reconnection
