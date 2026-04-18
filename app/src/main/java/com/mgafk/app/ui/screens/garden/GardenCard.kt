@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -894,10 +895,12 @@ private fun MultiSlotPlantDetailDialog(
             // Tick every second for live countdown
             val now = rememberSecondTick()
 
-            // Scrollable crop list
+            // Scrollable crop list — capped so the Pot button stays visible on
+            // plants with many slots (e.g. 8-slot FavaBean).
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 340.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {

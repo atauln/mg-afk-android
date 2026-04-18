@@ -954,10 +954,12 @@ private fun HatchingView(
                         if (firstPet.mutation != "Normal") {
                             MutationGlow(mutation = firstPet.mutation, size = 120)
                         }
-                        AsyncImage(
-                            model = firstPet.petSprite,
+                        SpriteImage(
+                            category = "pets",
+                            name = firstPet.pet,
+                            size = 90.dp,
                             contentDescription = firstPet.pet,
-                            modifier = Modifier.size(90.dp),
+                            mutations = if (firstPet.mutation != "Normal") listOf(firstPet.mutation) else emptyList(),
                         )
                     }
                 }
@@ -1325,10 +1327,12 @@ private fun HatchedPetTile(pet: EggHatchPet) {
             modifier = Modifier.align(Alignment.Center).padding(top = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            AsyncImage(
-                model = pet.petSprite,
+            SpriteImage(
+                category = "pets",
+                name = pet.pet,
+                size = 28.dp,
                 contentDescription = pet.pet,
-                modifier = Modifier.size(28.dp),
+                mutations = if (pet.mutation != "Normal") listOf(pet.mutation) else emptyList(),
             )
             Text(
                 pet.pet,

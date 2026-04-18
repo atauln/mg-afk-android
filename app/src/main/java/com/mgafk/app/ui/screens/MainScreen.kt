@@ -860,7 +860,10 @@ private fun SectionContent(
                         casinoViewModel.fetchDepositConfig()
                         walletMode = "deposit"
                     },
-                    onWithdraw = { walletMode = "withdraw" },
+                    onWithdraw = {
+                        viewModel.fetchCurrencyBalance(session.id)
+                        walletMode = "withdraw"
+                    },
                 )
 
                 // Show WalletCard only when deposit/withdraw is active
@@ -876,6 +879,10 @@ private fun SectionContent(
                         onResetDeposit = { casinoViewModel.resetDeposit(); walletMode = null },
                         onRequestWithdraw = { amount -> casinoViewModel.requestWithdraw(amount) },
                         onResetWithdraw = { casinoViewModel.resetWithdraw(); walletMode = null },
+                        gameBalance = state.currencyBalance,
+                        casinoBalance = casinoState.casinoBalance,
+                        gameBalanceLoading = state.currencyBalanceLoading,
+                        onRefreshGameBalance = { viewModel.fetchCurrencyBalance(session.id) },
                         initialMode = walletMode,
                     )
                 }

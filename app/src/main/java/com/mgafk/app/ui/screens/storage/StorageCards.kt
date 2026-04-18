@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -18,7 +20,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -579,6 +583,7 @@ private fun StorageItemDetailDialog(
 
 // ── Storage pet detail dialog ──
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StoragePetDetailDialog(
     pet: InventoryPetItem,
@@ -695,12 +700,31 @@ private fun StoragePetDetailDialog(
                         }
                     }
                     if (pet.abilities.isNotEmpty()) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
                             Text("Abilities", fontSize = 12.sp, color = TextSecondary)
-                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
                                 pet.abilities.forEach { abilityId ->
-                                    Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(abilityColor(abilityId)))
+                                    val entry = remember(abilityId, apiReady) { MgApi.getAbilities()[abilityId] }
+                                    val displayName = entry?.name ?: abilityId
+                                    val bg = remember(entry?.color) { parseAbilityBrush(entry?.color) }
+                                    Text(
+                                        displayName,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(bg, alpha = 0.85f)
+                                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                                    )
                                 }
                             }
                         }
@@ -773,17 +797,8 @@ private fun PetTile(pet: InventoryPetItem, apiReady: Boolean) {
                 }
             }
         }
-        // STR top-right
-        if (ms > 0) {
-            val strText = if (isMax) "$cs" else "$cs/$ms"
-            val strColor = if (isMax) Color(0xFFFBBF24) else Accent
-            Text(
-                strText, fontSize = 7.sp, fontWeight = FontWeight.Bold,
-                color = strColor, lineHeight = 9.sp,
-                modifier = Modifier.align(Alignment.TopEnd).padding(5.dp),
-            )
-        }
-        // Center content
+        // Center content — STR goes below the name (top-right is reserved for the
+        // lock icon in the Pet Hutch card)
         Column(
             modifier = Modifier.align(Alignment.Center).padding(top = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -793,21 +808,42 @@ private fun PetTile(pet: InventoryPetItem, apiReady: Boolean) {
                 name, fontSize = 8.sp, fontWeight = FontWeight.Medium, color = TextPrimary,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = 10.sp,
             )
+            if (ms > 0) {
+                val strText = if (isMax) "$cs" else "$cs/$ms"
+                val strColor = if (isMax) Color(0xFFFBBF24) else Accent
+                Text(strText, fontSize = 7.sp, fontWeight = FontWeight.Bold, color = strColor, lineHeight = 9.sp)
+            }
             if (pet.abilities.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     pet.abilities.forEach { abilityId ->
+                        val entry = remember(abilityId, apiReady) { MgApi.getAbilities()[abilityId] }
+                        val bg = remember(entry?.color) { parseAbilityBrush(entry?.color) }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(abilityColor(abilityId)),
+                                .background(bg),
                         )
                     }
                 }
             }
         }
     }
+}
+
+/** Parse ability color string into a Brush (gradient or solid). Matches PetHungerCard. */
+private fun parseAbilityBrush(raw: String?): Brush {
+    if (raw == null) return SolidColor(Color(0xFF646464))
+    val hexPattern = Regex("#[0-9A-Fa-f]{6}")
+    val hexColors = hexPattern.findAll(raw).mapNotNull { match ->
+        try { Color(android.graphics.Color.parseColor(match.value)) } catch (_: Exception) { null }
+    }.toList()
+    if (hexColors.size >= 2 && raw.contains("gradient", ignoreCase = true)) {
+        return Brush.linearGradient(hexColors)
+    }
+    if (hexColors.isNotEmpty()) return SolidColor(hexColors.first())
+    return try { SolidColor(Color(android.graphics.Color.parseColor(raw))) } catch (_: Exception) { SolidColor(Color(0xFF646464)) }
 }
 
 private fun abilityColor(abilityId: String): Color {

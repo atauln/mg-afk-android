@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,7 +41,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -693,11 +698,13 @@ private fun PetTile(pet: InventoryPetItem, apiReady: Boolean) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     pet.abilities.forEach { abilityId ->
+                        val entry = remember(abilityId, apiReady) { MgApi.getAbilities()[abilityId] }
+                        val bg = remember(entry?.color) { parseAbilityBrush(entry?.color) }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(RoundedCornerShape(2.dp))
-                                .background(abilityColor(abilityId)),
+                                .background(bg),
                         )
                     }
                 }
@@ -778,6 +785,20 @@ private fun PetTileWithPrice(pet: InventoryPetItem, apiReady: Boolean, price: Lo
             }
         }
     }
+}
+
+/** Parse ability color string into a Brush (gradient or solid). Matches PetHungerCard. */
+private fun parseAbilityBrush(raw: String?): Brush {
+    if (raw == null) return SolidColor(Color(0xFF646464))
+    val hexPattern = Regex("#[0-9A-Fa-f]{6}")
+    val hexColors = hexPattern.findAll(raw).mapNotNull { match ->
+        try { Color(android.graphics.Color.parseColor(match.value)) } catch (_: Exception) { null }
+    }.toList()
+    if (hexColors.size >= 2 && raw.contains("gradient", ignoreCase = true)) {
+        return Brush.linearGradient(hexColors)
+    }
+    if (hexColors.isNotEmpty()) return SolidColor(hexColors.first())
+    return try { SolidColor(Color(android.graphics.Color.parseColor(raw))) } catch (_: Exception) { SolidColor(Color(0xFF646464)) }
 }
 
 private fun abilityColor(abilityId: String): Color {
@@ -882,11 +903,13 @@ private fun PlantUnpotDialog(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Crop slots list
+            // Crop slots list — capped so the "Plant in Garden" button stays visible
+            // on plants with many slots (e.g. 8-slot FavaBean).
             if (plant.slots.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 260.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
@@ -1675,6 +1698,7 @@ private fun ItemDetailDialog(
 
 // ── Pet detail dialog ──
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PetDetailDialog(
     pet: InventoryPetItem,
@@ -1832,19 +1856,30 @@ private fun PetDetailDialog(
                     }
 
                     if (pet.abilities.isNotEmpty()) {
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Text("Abilities", fontSize = 12.sp, color = TextSecondary)
-                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
                                 pet.abilities.forEach { abilityId ->
-                                    Box(
+                                    val entry = remember(abilityId, apiReady) { MgApi.getAbilities()[abilityId] }
+                                    val displayName = entry?.name ?: abilityId
+                                    val bg = remember(entry?.color) { parseAbilityBrush(entry?.color) }
+                                    Text(
+                                        displayName,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White,
+                                        maxLines = 1,
                                         modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(RoundedCornerShape(2.dp))
-                                            .background(abilityColor(abilityId)),
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(bg, alpha = 0.85f)
+                                            .padding(horizontal = 6.dp, vertical = 3.dp),
                                     )
                                 }
                             }

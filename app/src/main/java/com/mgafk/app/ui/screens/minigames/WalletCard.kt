@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,6 +34,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,6 +85,10 @@ fun WalletCard(
     onResetDeposit: () -> Unit,
     onRequestWithdraw: (Long) -> Unit,
     onResetWithdraw: () -> Unit,
+    gameBalance: Long? = null,
+    casinoBalance: Long? = null,
+    gameBalanceLoading: Boolean = false,
+    onRefreshGameBalance: () -> Unit = {},
     initialMode: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -94,6 +100,18 @@ fun WalletCard(
         }
     ) }
     var amount by remember { mutableStateOf("") }
+
+    // Auto-refresh game balance whenever the withdraw flow opens, so the max
+    // withdrawable amount reflects the player's current in-game coin total
+    // (the server refuses `/doughnate` if it pushes the total past 2,000,000).
+    LaunchedEffect(mode) {
+        if (mode == WalletMode.WITHDRAW) onRefreshGameBalance()
+    }
+    // Refresh after a deposit is confirmed — the player just transferred game
+    // breads to the casino, so their in-game balance dropped.
+    LaunchedEffect(deposit.status) {
+        if (deposit.status == "confirmed") onRefreshGameBalance()
+    }
 
     // Show deposit popup when pending/confirmed/expired/cancelled
     val showDepositPopup = deposit.active || deposit.status in listOf("confirmed", "expired", "cancelled")
@@ -141,6 +159,10 @@ fun WalletCard(
                 amount = amount,
                 onAmountChange = { amount = it },
                 withdraw = withdraw,
+                gameBalance = gameBalance,
+                casinoBalance = casinoBalance,
+                gameBalanceLoading = gameBalanceLoading,
+                onRefreshGameBalance = onRefreshGameBalance,
                 onConfirm = { amt -> onRequestWithdraw(amt) },
                 onCancel = { onResetWithdraw(); mode = WalletMode.IDLE },
             )
@@ -452,16 +474,40 @@ private fun DepositPopup(
 
 // ── Withdraw flow ──
 
+/** Server-side cap on the player's in-game coin total (Doughnate rejects overflow). */
+private const val GAME_COIN_CAP: Long = 2_000_000
+
 @Composable
 private fun WithdrawFlow(
     amount: String,
     onAmountChange: (String) -> Unit,
     withdraw: WithdrawUiState,
+    gameBalance: Long?,
+    casinoBalance: Long?,
+    gameBalanceLoading: Boolean,
+    onRefreshGameBalance: () -> Unit,
     onConfirm: (Long) -> Unit,
     onCancel: () -> Unit,
 ) {
     val parsedAmount = amount.toLongOrNull()
-    val isValid = parsedAmount != null && parsedAmount > 0
+    // Max withdrawable = min(casino balance, 2M − current game balance). If either
+    // is unknown we fall back to the casino balance alone (still validated server-side).
+    val headroom = gameBalance?.let { (GAME_COIN_CAP - it).coerceAtLeast(0L) }
+    val maxWithdrawable = when {
+        casinoBalance != null && headroom != null -> minOf(casinoBalance, headroom)
+        casinoBalance != null -> casinoBalance
+        headroom != null -> headroom
+        else -> null
+    }
+    val withinMax = parsedAmount != null && parsedAmount > 0 &&
+        (maxWithdrawable == null || parsedAmount <= maxWithdrawable)
+    val overLimit = parsedAmount != null && maxWithdrawable != null && parsedAmount > maxWithdrawable
+    val isValid = withinMax
+
+    var showHelp by remember { mutableStateOf(false) }
+    if (showHelp) {
+        WithdrawHelpDialog(onDismiss = { showHelp = false })
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -469,7 +515,17 @@ private fun WithdrawFlow(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Withdraw Breads", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = StatusConnected)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Withdraw Breads", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = StatusConnected)
+                IconButton(onClick = { showHelp = true }, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Outlined.HelpOutline,
+                        contentDescription = "Withdraw help",
+                        tint = TextMuted,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
             if (withdraw.status != "pending") {
                 IconButton(onClick = onCancel, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Outlined.Close, contentDescription = "Cancel", tint = TextMuted, modifier = Modifier.size(18.dp))
@@ -548,6 +604,37 @@ private fun WithdrawFlow(
 
             // ── Amount input ──
             else -> {
+                // Max withdrawable header — updates after onRefreshGameBalance returns.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = when {
+                            gameBalanceLoading && maxWithdrawable == null -> "Checking game balance..."
+                            maxWithdrawable != null -> "Max withdrawable: ${"%,d".format(maxWithdrawable)}"
+                            else -> "Max withdrawable: —"
+                        },
+                        fontSize = 11.sp,
+                        color = TextMuted,
+                    )
+                    if (maxWithdrawable != null && maxWithdrawable > 0) {
+                        Text(
+                            "Use max",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = StatusConnected,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onAmountChange(maxWithdrawable.toString()) }
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
                 OutlinedTextField(
                     value = amount,
                     onValueChange = { new -> onAmountChange(new.filter { it.isDigit() }) },
@@ -557,6 +644,7 @@ private fun WithdrawFlow(
                         AsyncImage(model = BREAD_SPRITE_URL, contentDescription = null, modifier = Modifier.size(20.dp))
                     },
                     singleLine = true,
+                    isError = overLimit,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = StatusConnected,
@@ -567,7 +655,14 @@ private fun WithdrawFlow(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
-                if (withdraw.error != null) {
+                if (overLimit && maxWithdrawable != null) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        "Would push your game balance past ${"%,d".format(GAME_COIN_CAP)} — the max you can withdraw right now is ${"%,d".format(maxWithdrawable)}.",
+                        fontSize = 11.sp,
+                        color = StatusError,
+                    )
+                } else if (withdraw.error != null) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(withdraw.error, fontSize = 11.sp, color = StatusError)
                 }
@@ -591,6 +686,30 @@ private fun WithdrawFlow(
             }
         }
     }
+}
+
+@Composable
+private fun WithdrawHelpDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Got it") }
+        },
+        title = { Text("About withdrawals", fontSize = 15.sp, fontWeight = FontWeight.SemiBold) },
+        text = {
+            Text(
+                "Breads are sent to your in-game account via the /doughnate command.\n\n" +
+                    "/doughnate refuses to deliver if your new in-game balance would exceed " +
+                    "${"%,d".format(GAME_COIN_CAP)}. " +
+                    "The app caps the withdraw amount to what can actually be delivered — " +
+                    "max = min(casino balance, ${"%,d".format(GAME_COIN_CAP)} − your game balance).\n\n" +
+                    "If your balance in-game grows after this dialog opens, tap the Use max shortcut " +
+                    "to refresh the cap.",
+                fontSize = 12.sp,
+                color = TextMuted,
+            )
+        },
+    )
 }
 
 // ── Countdown banner ──
